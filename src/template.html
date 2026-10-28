@@ -1,0 +1,1695 @@
+<title>Farras Artboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,300..800&family=Hanken+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Jersey+10&display=swap">
+<style>
+/* Layout: a design-app shell (top bar, left tools, right layers) floating over an
+   infinite canvas. Artboards live in world space; the background is a live
+   ordered-dither texture taken from the profile picture's look.
+   ART mode = green duotone (the designer). X-RAY mode = blueprint blue (the engineer). */
+:root {
+  color-scheme: dark;
+  /* Art-mode palette. JS rewrites these when the eyedropper picks a new accent. */
+  --accent: #9ccc87;      /* light green from the pfp */
+  --accent-ink: #10180e;  /* text that sits on the accent */
+  --bg-0: #121a10;        /* canvas dark tone */
+  --bg-1: #24361f;        /* canvas light tone */
+  --panel: rgba(16, 22, 14, .9);
+  --line: #2e3e2a;
+  --fg: #e3eadc;
+  --muted: #93a28c;
+  --paper: #e7eadf;       /* artboard paper */
+  --ink: #10150e;         /* artboard ink */
+  --deep: #0c110b;        /* dark artboard fill */
+  --marker: #e5281b;      /* red marker from the PDF portfolio, never re-themed */
+
+  /* X-ray (blueprint) palette, fixed */
+  --bp: #2d46d6;          /* cobalt */
+  --bp-deep: #1a2a9e;
+  --bp-line: #6cc8ec;     /* cyan grid lines */
+  --bp-fg: #e2e8ff;
+  --f-pixel: "Jersey 10", "IBM Plex Mono", ui-monospace, monospace;
+  --noise: none;          /* generated at boot */
+
+  --f-display: "Bricolage Grotesque", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "Hanken Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --z: 1; /* current zoom, written by JS so labels and handles can counter-scale */
+}
+body.xray {
+  --panel: rgba(20, 32, 150, .9);
+  --line: rgba(108, 200, 236, .35);
+  --fg: var(--bp-fg);
+  --muted: #a8b8f5;
+}
+html, body { height: 100%; }
+h1, h2, h3, p, ul, figure, figcaption, pre { margin: 0; padding: 0; }
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  background: var(--bg-0);
+  color: var(--fg);
+  font: 15px/1.5 var(--f-body);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+body.xray :focus-visible { outline-color: #fff; }
+
+/* ---------- Stage & background ---------- */
+#stage {
+  position: fixed; inset: 0; overflow: hidden;
+  touch-action: none; user-select: none; -webkit-user-select: none;
+}
+#bg {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  image-rendering: pixelated; display: block;
+}
+body.xray #bg { opacity: 0; }
+/* X-ray: retro perspective grid room (floor + ceiling) drawn on #xg */
+#xg { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; display: none; }
+body.xray #xg { display: block; }
+body.xray #stage { background-color: var(--bp); }
+/* CRT-ish grain + faint scanlines over the whole x-ray scene */
+#grain { position: fixed; inset: 0; z-index: 16; pointer-events: none; display: none;
+  background-image: var(--noise), repeating-linear-gradient(0deg, rgba(0,0,40,.12) 0 1px, transparent 1px 3px);
+  opacity: .5; mix-blend-mode: overlay; animation: grain .5s steps(4) infinite; }
+body.xray #grain { display: block; }
+@keyframes grain { 0% { background-position: 0 0, 0 0 } 25% { background-position: -40px 20px, 0 0 } 50% { background-position: 30px -50px, 0 0 } 75% { background-position: -20px -30px, 0 0 } }
+#world { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+
+/* ---------- Artboards ---------- */
+.ab { position: absolute; box-shadow: 0 30px 80px rgba(0,0,0,.45); }
+.ab-label {
+  position: absolute; left: 0; bottom: 100%;
+  padding-bottom: calc(6px / var(--z));
+  font: 500 calc(12px / var(--z))/1 var(--f-mono);
+  color: var(--muted); white-space: nowrap; cursor: grab;
+  display: flex; gap: calc(8px / var(--z)); align-items: baseline;
+}
+.ab-label b { color: var(--fg); font-weight: 500; }
+.ab.selected .ab-label b { color: var(--accent); }
+body.xray .ab.selected .ab-label b { color: var(--bp-fg); }
+.ab-body { position: absolute; inset: 0; overflow: hidden; }
+
+/* selection box */
+#sel { position: absolute; pointer-events: none; border: calc(1.5px / var(--z)) solid var(--accent); display: none; }
+#sel i {
+  position: absolute; width: calc(9px / var(--z)); height: calc(9px / var(--z));
+  background: var(--paper); border: calc(1.5px / var(--z)) solid var(--accent);
+  transform: translate(-50%, -50%);
+}
+body.xray #sel, body.xray #sel i { border-color: var(--bp-line); }
+body.xray #sel i { background: var(--bp-deep); }
+
+/* measurement lines (x-ray only) */
+.meas { position: absolute; display: none; color: var(--bp-line); font: 400 calc(15px / var(--z))/1 var(--f-pixel); letter-spacing: .04em; }
+.meas.mw { left: 0; right: 0; top: calc(-26px / var(--z)); border-top: 1px solid var(--bp-line); }
+.meas.mh { top: 0; bottom: 0; left: calc(-26px / var(--z)); border-left: 1px solid var(--bp-line); }
+.meas span { position: absolute; background: var(--bp); padding: 0 .4em; }
+.meas.mw span { left: 50%; top: 0; transform: translate(-50%, -50%); }
+.meas.mh span { top: 50%; left: 0; transform: translate(-50%, -50%) rotate(-90deg); }
+body.xray .meas { display: block; }
+body.xray .ab-label { top: calc(-48px / var(--z)); bottom: auto; }
+
+/* x-ray notes */
+.note {
+  display: none; position: absolute; z-index: 3;
+  font: 500 12px/1.35 var(--f-mono); color: var(--bp-fg);
+  background: rgba(20, 30, 140, .9); border: 1px dashed var(--bp-line);
+  padding: 6px 9px; white-space: nowrap;
+}
+.note::before { content: "↳ "; opacity: .7; }
+body.xray .note { display: block; }
+
+/* x-ray: everything becomes outlines on blueprint */
+body.xray .ab { background: rgba(45, 70, 214, .72) !important; box-shadow: 0 0 0 1px rgba(108,200,236,.15), 0 0 40px rgba(108,200,236,.12); outline: 1.5px dashed var(--bp-line); }
+body.xray .ab-label { color: var(--bp-line); font-family: var(--f-pixel); font-size: calc(16px / var(--z)); font-weight: 400; letter-spacing: .04em; }
+/* headings turn into chunky bitmap type, like an old screen */
+body.xray .ab-body :is(h1, h2, h3) {
+  font-family: var(--f-pixel); font-weight: 400; font-variation-settings: normal;
+  letter-spacing: .01em; color: var(--bp-fg); text-shadow: 0 0 14px rgba(108, 200, 236, .55);
+}
+body.xray .cover h1 { font-size: 200px; line-height: .78; }
+body.xray .ab-body .eyebrow, body.xray .ab-body .chip, body.xray .card .status { color: var(--bp-line); }
+body.xray .ab-body { color: var(--bp-fg) !important; }
+body.xray .ab-body :where(h1, h2, h3, p, li, .chip, .frame, .card, .row, .pfp, .skills > div) {
+  outline: 1px dashed rgba(108, 200, 236, .4); outline-offset: 3px;
+}
+body.xray .ab-body * { border-color: rgba(108, 200, 236, .6) !important; }
+body.xray .ab-body .chip { background: transparent; }
+
+/* Cover */
+#ab-cover { background: var(--paper); color: var(--ink); }
+.cover { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr 420px; gap: 40px; padding: 64px; }
+.eyebrow { font: 500 13px/1.2 var(--f-mono); letter-spacing: .12em; text-transform: uppercase; }
+.cover h1 {
+  font: 800 168px/.82 var(--f-display); font-stretch: 82%; font-optical-sizing: auto;
+  letter-spacing: .01em; margin: 34px 0 0 -6px; white-space: nowrap;
+}
+/* each letter reacts to the cursor: lighter + wider + lifted near it (--k: 0..1) */
+.ch {
+  --k: 0; display: inline-block;
+  font-weight: calc(800 - var(--k) * 480); font-stretch: calc(82% + var(--k) * 18%);
+  transform: translateY(calc(var(--k) * -16px));
+  transition: font-weight .25s, font-stretch .25s, transform .25s;
+}
+.ch.pop { animation: pop .45s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes pop { 0% { scale: 1 1 } 35% { scale: 1.08 .86 } 70% { scale: .96 1.07 } 100% { scale: 1 1 } }
+body.xray .ch { font-weight: 400; font-stretch: 100%; }
+.cover blockquote { margin: 40px 0 0; max-width: 100%; }
+.qwrap { position: relative; }
+/* "room full of mirrors": hover the quote and it echoes + reflects */
+.cover .thesis { transition: text-shadow .3s; }
+.cover blockquote:hover .thesis:not(.mirror) {
+  text-shadow: 3px 3px 0 color-mix(in srgb, var(--accent) 90%, transparent),
+               7px 7px 0 color-mix(in srgb, var(--accent) 55%, transparent),
+               12px 12px 0 color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.mirror {
+  position: absolute; left: 0; right: 0; top: 100%; transform: scaleY(-1); pointer-events: none;
+  opacity: 0; transition: opacity .35s; filter: blur(.6px);
+  -webkit-mask-image: linear-gradient(to top, rgba(0,0,0,.55), transparent 55%); mask-image: linear-gradient(to top, rgba(0,0,0,.55), transparent 55%);
+}
+.cover blockquote:hover .mirror { opacity: 1; }
+body.xray .mirror { display: none; }
+.cover .thesis { font: 500 26px/1.22 var(--f-display); font-variation-settings: "wdth" 88; letter-spacing: .005em; text-wrap: balance; }
+.cover cite { display: block; margin-top: 30px; font: 500 12px var(--f-mono); font-style: normal; letter-spacing: .1em; text-transform: uppercase; opacity: .7; }
+.cover .meta { position: absolute; left: 64px; bottom: 56px; display: flex; gap: 28px; font: 500 13px var(--f-mono); }
+.cover .meta span::before { content: "■ "; color: var(--accent); }
+body.xray .cover .meta span::before { color: var(--bp-line); }
+.pfp {
+  --rx: 0deg; --ry: 0deg; --gx: 50%; --gy: 50%;
+  position: relative; align-self: center; aspect-ratio: 1; width: 100%; background: var(--ink); cursor: zoom-in;
+  /* tilts toward the cursor and thumps on every kick while the record plays */
+  transform: perspective(900px) rotateX(var(--rx)) rotateY(var(--ry)) scale(calc(1 + var(--beat, 0) * .035));
+  transition: transform .18s ease-out; transform-style: preserve-3d;
+}
+.pfp::after {
+  content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none; opacity: 0; transition: opacity .3s;
+  background: radial-gradient(circle at var(--gx) var(--gy), rgba(255,255,255,.28), transparent 45%);
+  mix-blend-mode: screen;
+}
+.pfp:hover::after { opacity: 1; }
+
+/* now playing: record slides out of its sleeve on hover, spins while playing */
+.np { position: absolute; left: 64px; bottom: 44px; display: flex; align-items: center; gap: 20px; }
+.deck { position: relative; width: 176px; height: 96px; flex-shrink: 0; }
+.sleeve {
+  position: absolute; inset: 0 auto 0 0; width: 96px; z-index: 2;
+  background: radial-gradient(var(--ink) 1.1px, transparent 1.7px) 0 0 / 6px 6px, var(--accent);
+  display: grid; place-items: center; box-shadow: 3px 3px 0 var(--ink);
+  font: 800 34px/1 var(--f-display); color: var(--ink);
+}
+.sleeve span { background: var(--accent); padding: 0 6px; }
+.slide { display: block; position: absolute; left: 6px; top: 4px; width: 88px; height: 88px; transition: transform .55s cubic-bezier(.2, .9, .25, 1); }
+.deck:hover .slide, .deck.playing .slide, .deck:focus-visible .slide { transform: translateX(76px); }
+.disc {
+  display: block; width: 100%; height: 100%; border-radius: 50%;
+  background:
+    conic-gradient(from 20deg, transparent 0 8%, rgba(255,255,255,.16) 12%, transparent 18% 58%, rgba(255,255,255,.1) 62%, transparent 68%),
+    repeating-radial-gradient(circle, #141414 0 1.4px, #262626 1.4px 2.8px);
+  animation: spin 2.2s linear infinite paused; position: relative;
+}
+.disc::after { content: ""; position: absolute; inset: 33%; border-radius: 50%; background: radial-gradient(var(--ink) 0 2.5px, var(--accent) 3px); }
+.deck:hover .disc { animation-play-state: running; animation-duration: 5s; }
+.deck.playing .disc { animation-play-state: running; animation-duration: 1.8s; }
+@keyframes spin { to { rotate: 360deg; } }
+.np-meta { display: grid; gap: 6px; min-width: 0; max-width: 250px; }
+.np-k { font: 500 11px var(--f-mono); letter-spacing: .12em; text-transform: uppercase; opacity: .7; }
+.socials { position: absolute; right: 64px; top: 58px; display: flex; gap: 18px; font: 500 12px var(--f-mono); letter-spacing: .06em; z-index: 2; }
+.socials a { color: inherit; text-decoration: none; border-bottom: 1.5px solid var(--marker); padding-bottom: 1px; }
+.socials a:hover { background: var(--accent); }
+body.xray .socials a { border-color: var(--bp-line); }
+.np-title { font: 700 24px/1.05 var(--f-display); font-stretch: 85%; }
+.np-artist { font-size: 14px; }
+.np-artist a { color: inherit; }
+.np-list { display: flex; flex-wrap: wrap; gap: 4px 12px; font: 500 15px/1.3 var(--f-body); max-width: 240px; }
+.np-list a { color: inherit; text-decoration: none; border-bottom: 1.5px solid transparent; }
+.np-list a:hover { border-color: currentColor; }
+.eq { width: 200px; height: 32px; image-rendering: pixelated; display: block; }
+body.xray .sleeve { background: transparent; box-shadow: none; outline: 1px dashed var(--bp-line); color: var(--bp-fg); font-family: var(--f-pixel); font-weight: 400; }
+body.xray .sleeve span { background: transparent; }
+body.xray .disc { background: repeating-radial-gradient(circle, transparent 0 3px, rgba(108,200,236,.55) 3px 4px); }
+body.xray .disc::after { background: var(--bp-deep); outline: 1px solid var(--bp-line); }
+.pfp img, .frame .src { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.dith {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  image-rendering: pixelated; transition: opacity .4s steps(5);
+}
+.pfp:hover .dith, .frame:hover .dith, .reveal .dith { opacity: 0; }
+.pfp-cap { position: absolute; left: 0; top: 100%; margin-top: 10px; font: 500 12px var(--f-mono); opacity: .7; }
+
+/* About */
+#ab-about { background: var(--accent); color: var(--accent-ink); }
+.about { position: absolute; inset: 0; padding: 56px; display: flex; flex-direction: column; gap: 22px; }
+.about-row { display: grid; grid-template-columns: 1fr 190px; gap: 28px; align-items: start; }
+.sticker { transform: rotate(4deg); transition: transform .35s cubic-bezier(.2, .9, .3, 1.4); }
+.sticker:hover { transform: rotate(-2deg) scale(1.05); }
+.sticker .tag {
+  display: block; position: relative; z-index: 2; margin: 0 -14px -8px -10px; padding: 6px 8px;
+  background: var(--ink); color: var(--paper); transform: rotate(-4deg);
+  font: 800 19px/1 var(--f-display); font-stretch: 75%; text-transform: uppercase; white-space: nowrap;
+}
+.sticker .frame { box-shadow: 4px 4px 0 var(--ink); }
+.sticker small { display: block; margin-top: 10px; font: 500 12px var(--f-mono); }
+.tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tools b { font: 500 12px var(--f-mono); letter-spacing: .12em; text-transform: uppercase; margin-right: 6px; }
+body.xray .sticker .tag { background: transparent; color: var(--bp-fg); outline: 1px dashed var(--bp-line); }
+.about h2 { font: 800 76px/.88 var(--f-display); font-variation-settings: "wdth" 75; letter-spacing: -.02em; text-wrap: balance; }
+.about p { font-size: 16px; line-height: 1.55; max-width: 46ch; }
+.skills { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: auto; }
+.skills h3 { font: 500 12px var(--f-mono); letter-spacing: .12em; text-transform: uppercase; border-bottom: 1.5px solid currentColor; padding-bottom: 8px; margin-bottom: 10px; }
+.skills ul { list-style: none; display: grid; gap: 6px; font-size: 15px; }
+.heading { font: 500 13px var(--f-mono); border-top: 1.5px solid currentColor; padding-top: 14px; }
+
+/* Works */
+#ab-works { background: var(--deep); color: var(--paper); }
+.works { position: absolute; inset: 0; padding: 56px; display: flex; flex-direction: column; gap: 28px; }
+.sec-head { display: flex; justify-content: space-between; align-items: end; gap: 24px; }
+.sec-head h2 { font: 800 84px/.85 var(--f-display); font-variation-settings: "wdth" 75; letter-spacing: -.02em; }
+.sec-head p { font: 500 12px/1.5 var(--f-mono); opacity: .7; text-align: right; }
+.wgrid { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px; align-items: start; }
+.pgrid { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; align-items: start; }
+.pcol { display: grid; gap: 26px; }
+.sec-head { position: relative; z-index: 1; }
+.work { display: grid; gap: 10px; }
+/* pieces sit slightly crooked like prints pinned to a wall; hover straightens + lifts them */
+.tilt { transform: rotate(var(--r, 0deg)); transition: transform .35s cubic-bezier(.2, .9, .3, 1.3); position: relative; }
+.tilt:hover { transform: rotate(0deg) translateY(-8px) scale(1.03); z-index: 3; }
+.frame { position: relative; aspect-ratio: 4 / 3; background: var(--ink); overflow: hidden; cursor: zoom-in; box-shadow: 5px 5px 0 rgba(0, 0, 0, .28); }
+.sec-head h2.shout { font-size: 112px; line-height: .82; text-transform: uppercase; letter-spacing: -.01em; }
+.sec-head a { color: inherit; }
+.fuzz { filter: url(#fuzz); }
+body.xray .fuzz { filter: none; }
+.scrib { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+body.xray .scrib { display: none; }
+
+/* Documentation */
+#ab-docs { background: var(--paper); color: var(--ink); }
+#ab-docs::after { content: ""; position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 5; }
+#ab-docs.flash::after { animation: flash .6s ease-out; }
+@keyframes flash { 0% { opacity: .92; } 100% { opacity: 0; } }
+.docs { position: absolute; inset: 0; padding: 56px; display: flex; flex-direction: column; gap: 28px; }
+.cam {
+  position: absolute; right: 70px; bottom: 44px; z-index: 2; width: 220px; text-align: center;
+  transform: rotate(7deg); transition: transform .4s cubic-bezier(.2, .9, .3, 1.4);
+}
+.cam:hover { transform: rotate(-3deg) scale(1.07); }
+.cam:active { transform: rotate(-3deg) scale(.97); }
+.cam img { display: block; width: 100%; mix-blend-mode: multiply; }
+.cam small { display: block; margin-top: 4px; font: 500 12px var(--f-mono); }
+.work-cap { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+.work-cap small { font: 500 11px var(--f-mono); opacity: .65; }
+.chip {
+  display: inline-block; font: 500 10.5px/1 var(--f-mono); letter-spacing: .08em; text-transform: uppercase;
+  padding: 5px 7px; border: 1px solid currentColor; border-radius: 2px;
+}
+.frame .chip { position: absolute; top: 10px; left: 10px; z-index: 2; background: var(--deep); color: var(--accent); border-color: var(--accent); }
+
+/* Tech */
+#ab-tech { background: var(--paper); color: var(--ink); }
+.tech { position: absolute; inset: 0; padding: 56px; display: flex; flex-direction: column; gap: 28px; }
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; flex: 1; }
+.card { border: 1.5px solid var(--ink); padding: 26px; display: flex; flex-direction: column; gap: 12px; position: relative; }
+.card h3 { font: 700 34px/1 var(--f-display); font-variation-settings: "wdth" 80; }
+.card p { font-size: 16px; max-width: 46ch; }
+.card .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+.card .status { position: absolute; top: 22px; right: 22px; font: 500 11px var(--f-mono); }
+.card .status::before { content: "● "; color: var(--accent); }
+.card.ghost { border-style: dashed; opacity: .6; }
+.schem { display: none; font: 500 13px/1.35 var(--f-mono); white-space: pre; color: var(--bp-line); }
+body.xray .schem { display: block; }
+body.xray .card p { display: none; }
+
+/* Contact */
+#ab-contact { background: var(--ink); color: var(--paper); }
+.contact { position: absolute; inset: 0; padding: 56px; display: flex; flex-direction: column; gap: 32px; }
+.contact h2 { font: 800 84px/.84 var(--f-display); font-variation-settings: "wdth" 75; letter-spacing: -.025em; color: var(--accent); }
+body.xray .contact h2 { color: var(--bp-fg); }
+.rows { display: grid; margin-top: auto; }
+.row { display: grid; grid-template-columns: 96px 1fr auto; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid rgba(231,234,223,.25); }
+.row span { font: 500 11px var(--f-mono); letter-spacing: .1em; text-transform: uppercase; opacity: .6; }
+.row a, .row code { color: inherit; font: 500 16px var(--f-body); text-decoration: none; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.row a:hover { color: var(--accent); }
+.mini { font: 500 11px var(--f-mono); border: 1px solid currentColor; padding: 5px 8px; border-radius: 2px; }
+.mini:hover { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+/* ---------- App chrome ---------- */
+.panel { background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+#top {
+  position: fixed; z-index: 20; left: 0; right: 0; top: 0;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) 8px max(12px, env(safe-area-inset-left, 0px));
+  display: flex; align-items: center; gap: 12px;
+  border-width: 0 0 1px;
+}
+.mark { flex-shrink: 0; width: 30px; height: 30px; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); font: 800 17px var(--f-display); }
+body.xray .mark { background: var(--bp-line); color: var(--bp-deep); font-family: var(--f-pixel); font-weight: 400; font-size: 22px; }
+.file { font: 500 13px var(--f-mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.file b { color: var(--fg); font-weight: 500; }
+.seg { margin-inline: auto; display: flex; border: 1px solid var(--line); padding: 3px; gap: 3px; flex-shrink: 0; }
+.seg button { font: 500 12px var(--f-mono); letter-spacing: .08em; padding: 6px 12px; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+body.xray .seg button[aria-pressed="true"] { background: var(--bp-line); color: var(--bp-deep); }
+.top-r { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.btn { font: 500 12px var(--f-mono); padding: 7px 11px; border: 1px solid var(--line); white-space: nowrap; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+body.xray .btn:hover { border-color: #fff; color: #fff; }
+#zoomBtn { min-width: 64px; font-variant-numeric: tabular-nums; }
+#layersBtn { display: none; }
+
+#tools {
+  position: fixed; z-index: 20; left: max(12px, env(safe-area-inset-left, 0px)); top: 50%; transform: translateY(-50%);
+  display: flex; flex-direction: column; gap: 4px; padding: 6px;
+}
+.tool { width: 42px; height: 42px; display: grid; place-items: center; position: relative; color: var(--muted); }
+.tool svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.tool:hover { color: var(--fg); background: rgba(255,255,255,.05); }
+.tool[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+body.xray .tool[aria-pressed="true"] { background: var(--bp-line); color: var(--bp-deep); }
+.tool .tip {
+  position: absolute; left: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+  background: var(--panel); border: 1px solid var(--line); padding: 5px 8px; white-space: nowrap;
+  font: 500 12px var(--f-mono); color: var(--fg); pointer-events: none; opacity: 0; transition: opacity .15s;
+}
+.tool .tip kbd { color: var(--accent); margin-left: 6px; font-family: inherit; }
+body.xray .tool .tip kbd { color: #fff; }
+.tool:hover .tip, .tool:focus-visible .tip { opacity: 1; }
+
+#side {
+  position: fixed; z-index: 20; right: max(12px, env(safe-area-inset-right, 0px)); top: 62px; bottom: 46px; width: 264px;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.side-h { font: 500 11px var(--f-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); padding: 14px 16px 8px; }
+#layers { list-style: none; padding: 0 8px 8px; display: grid; gap: 2px; }
+#layers button { width: 100%; display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; align-items: center; padding: 8px; text-align: left; font-size: 14px; }
+#layers button:hover { background: rgba(255,255,255,.05); }
+#layers button[aria-current="true"] { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+body.xray #layers button[aria-current="true"] { background: rgba(255,255,255,.14); color: #fff; }
+#layers .ico { font: 500 13px var(--f-mono); opacity: .6; }
+#layers small { font: 500 11px var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+#inspect { border-top: 1px solid var(--line); margin-top: auto; padding-bottom: 10px; }
+.props { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 0 16px; }
+.prop { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; background: rgba(255,255,255,.04); font: 500 12px var(--f-mono); font-variant-numeric: tabular-nums; }
+.prop span { color: var(--muted); }
+.prop.wide { grid-column: 1 / -1; align-items: center; }
+.sw { width: 14px; height: 14px; border: 1px solid var(--line); display: inline-block; vertical-align: -2px; margin-right: 6px; }
+#resetAccent { font: 500 11px var(--f-mono); color: var(--muted); text-decoration: underline; }
+.side-tip { padding: 10px 16px 0; font-size: 13px; color: var(--muted); line-height: 1.45; }
+
+#status {
+  position: fixed; z-index: 20; left: 0; right: 0; bottom: 0;
+  padding: 7px max(14px, env(safe-area-inset-right, 0px)) calc(7px + env(safe-area-inset-bottom, 0px)) max(14px, env(safe-area-inset-left, 0px));
+  display: flex; justify-content: space-between; gap: 16px; border-width: 1px 0 0;
+  font: 500 11.5px var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums;
+}
+#status b { color: var(--fg); font-weight: 500; }
+
+/* overlays */
+#pen { position: fixed; inset: 0; z-index: 15; pointer-events: none; width: 100%; height: 100%; }
+#pen path { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+#pen rect { fill: var(--paper); stroke: var(--accent); stroke-width: 1.5; }
+body.xray #pen path, body.xray #pen rect { stroke: var(--bp-line); }
+body.xray #pen rect { fill: var(--bp-deep); }
+#pen g { transition: opacity 1s ease .3s; }
+#fx { position: fixed; inset: 0; z-index: 40; pointer-events: none; width: 100%; height: 100%; image-rendering: pixelated; }
+#loupe {
+  position: fixed; z-index: 30; pointer-events: none; display: none; align-items: center; gap: 8px;
+  padding: 5px 8px 5px 5px; font: 500 12px var(--f-mono);
+}
+#loupe i { width: 26px; height: 26px; border: 2px solid var(--fg); border-radius: 50%; }
+/* Spotify mini player (live site only) */
+#dock {
+  position: fixed; z-index: 22; left: max(76px, env(safe-area-inset-left, 0px)); bottom: calc(46px + env(safe-area-inset-bottom, 0px));
+  width: min(340px, calc(100vw - 24px)); padding: 8px; display: grid; gap: 6px;
+}
+.dock-h { display: flex; justify-content: space-between; align-items: center; font: 500 11px var(--f-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding: 0 2px; }
+.dock-h button { font-size: 18px; line-height: 1; padding: 0 4px; color: var(--muted); }
+.dock-h button:hover { color: var(--fg); }
+#spEmbed { min-height: 80px; border-radius: 10px; overflow: hidden; }
+#spEmbed iframe { display: block; border: 0; border-radius: 10px; }
+#toast {
+  position: fixed; z-index: 35; left: 50%; bottom: 58px; transform: translate(-50%, 12px);
+  padding: 9px 14px; font: 500 12.5px var(--f-mono); opacity: 0; transition: opacity .25s, transform .25s;
+  pointer-events: none; max-width: calc(100vw - 32px); text-align: center;
+}
+#toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* Quick view */
+#qv { position: fixed; inset: 0; z-index: 50; background: var(--bg-0); overflow-y: auto; }
+body.xray #qv { background: var(--bp-deep); }
+.qv-in { max-width: 760px; margin: 0 auto; padding-block: calc(28px + env(safe-area-inset-top, 0px)) 64px; padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); display: grid; gap: 40px; }
+.qv-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.qv-in h1 { font: 800 clamp(64px, 16vw, 128px)/.82 var(--f-display); font-variation-settings: "wdth" 75; letter-spacing: -.03em; }
+.qv-in h2 { font: 500 12px var(--f-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 14px; }
+body.xray .qv-in h2 { color: var(--bp-line); }
+.qv-in p { max-width: 62ch; }
+.qv-list { display: grid; gap: 14px; }
+.qv-item { display: grid; gap: 4px; }
+.qv-item b { font: 700 20px var(--f-display); }
+.qv-item small { font: 500 12px var(--f-mono); color: var(--muted); }
+
+/* ---------- Phone ---------- */
+@media (max-width: 760px) {
+  #tools { top: auto; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); flex-direction: row; }
+  .tool .tip { display: none; }
+  #status { display: none; }
+  #layersBtn { display: inline-block; }
+  #zoomBtn { display: none; }
+  #top { gap: 8px; }
+  .file { display: none; }
+  .seg { margin-inline: 0 auto; }
+  .seg button { padding: 6px 9px; }
+  #side { display: none; top: auto; bottom: calc(72px + env(safe-area-inset-bottom, 0px)); left: max(12px, env(safe-area-inset-left, 0px)); width: auto; max-height: 60%; }
+  #side.open { display: flex; }
+  #toast { bottom: calc(80px + env(safe-area-inset-bottom, 0px)); }
+  #dock { left: max(12px, env(safe-area-inset-left, 0px)); bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dith, #toast, #pen g, .tool .tip, .ch, .pfp, .slide { transition: none; }
+  .disc, .ch.pop { animation: none; }
+  #grain { animation: none; }
+}
+</style>
+
+<div id="stage" aria-label="Portfolio canvas">
+  <canvas id="bg" aria-hidden="true"></canvas>
+  <canvas id="xg" aria-hidden="true"></canvas>
+  <div id="world"><div id="sel"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+</div>
+<svg id="pen" aria-hidden="true"></svg>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <!-- grainy, slightly melted edges like the photocopied type in the PDF portfolio -->
+  <filter id="fuzz" x="-5%" y="-10%" width="110%" height="120%">
+    <feTurbulence type="fractalNoise" baseFrequency="1.6" numOctaves="1" seed="4" result="n"/>
+    <feDisplacementMap in="SourceGraphic" in2="n" scale="6" xChannelSelector="R" yChannelSelector="G" result="d"/>
+    <feGaussianBlur in="d" stdDeviation=".6"/>
+  </filter>
+</svg>
+<div id="grain" aria-hidden="true"></div>
+
+<header id="top" class="panel">
+  <div class="mark" aria-hidden="true">F</div>
+  <div class="file">farras / <b>portfolio</b> · draft</div>
+  <div class="seg" role="group" aria-label="View mode">
+    <button id="modeArt" aria-pressed="true">ART</button>
+    <button id="modeX" aria-pressed="false">TECH</button>
+  </div>
+  <div class="top-r">
+    <button class="btn" id="zoomBtn" title="Fit everything (0)">100%</button>
+    <button class="btn" id="layersBtn" aria-expanded="false" aria-controls="side">Layers</button>
+    <button class="btn" id="qvBtn" title="Quick view (Q)">Quick view</button>
+  </div>
+</header>
+
+<nav id="tools" class="panel" aria-label="Tools">
+  <button class="tool" data-tool="move" aria-pressed="true" aria-label="Move">
+    <svg viewBox="0 0 24 24"><path d="M5 3l14 7-6 2-2 6z"/></svg><span class="tip">Move · select, drag labels<kbd>V</kbd></span></button>
+  <button class="tool" data-tool="hand" aria-pressed="false" aria-label="Hand">
+    <svg viewBox="0 0 24 24"><path d="M8 12V5.5a1.5 1.5 0 013 0V11m0-6.5a1.5 1.5 0 013 0V11m0-5a1.5 1.5 0 013 0v7c0 4-2.5 7-6.5 7-3 0-4.5-1.5-6-4l-2-3.5a1.4 1.4 0 012.3-1.6L8 13"/></svg><span class="tip">Hand · pan<kbd>H</kbd></span></button>
+  <button class="tool" data-tool="pen" aria-pressed="false" aria-label="Pen">
+    <svg viewBox="0 0 24 24"><path d="M12 3l6 9-6 9-6-9z"/><circle cx="12" cy="12" r="1.6"/><path d="M12 3v7.4"/></svg><span class="tip">Pen · draw a line to a board<kbd>P</kbd></span></button>
+  <button class="tool" data-tool="drop" aria-pressed="false" aria-label="Eyedropper">
+    <svg viewBox="0 0 24 24"><path d="M14 6l4 4M5 19l1-4 9-9 3 3-9 9z"/><path d="M15.5 4.5l1.6-1.6a2 2 0 012.9 2.9l-1.6 1.6"/></svg><span class="tip">Eyedropper · retheme the site<kbd>I</kbd></span></button>
+  <button class="tool" data-tool="zoom" aria-pressed="false" aria-label="Zoom">
+    <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5M8 10.5h5M10.5 8v5"/></svg><span class="tip">Zoom · click in, Alt-click out<kbd>Z</kbd></span></button>
+</nav>
+
+<aside id="side" class="panel" aria-label="Layers and inspector">
+  <div class="side-h">Layers</div>
+  <ul id="layers"></ul>
+  <div class="side-tip" id="sideTip">Click a layer to fly there. Press <b>T</b> for the tech side.</div>
+  <div id="inspect">
+    <div class="side-h">Inspect</div>
+    <div class="props" id="props"></div>
+  </div>
+</aside>
+
+<footer id="status" class="panel">
+  <div>X <b id="sx">0</b> &nbsp;Y <b id="sy">0</b> &nbsp;·&nbsp; <span id="smode">Art mode</span></div>
+  <div>Ctrl + scroll to zoom · Space to pan · <b>T</b> tech mode · <b>Q</b> quick view</div>
+</footer>
+
+<div id="loupe" class="panel"><i></i><span>#000000</span></div>
+<div id="dock" class="panel" hidden aria-label="Spotify player">
+  <div class="dock-h"><span>Now playing · Spotify</span><button id="dockClose" aria-label="Close player">×</button></div>
+  <div id="spEmbed"></div>
+</div>
+<div id="toast" class="panel" role="status" aria-live="polite"></div>
+<canvas id="fx" aria-hidden="true"></canvas>
+
+<div id="qv" hidden role="dialog" aria-modal="true" aria-label="Quick view"><div class="qv-in" id="qvIn"></div></div>
+
+<script>
+/* =====================================================================
+   CONTENT — edit this block. Everything on the canvas and in Quick view
+   is rendered from these objects.
+   ===================================================================== */
+const PROFILE = {
+  short: 'Farras',
+  full: 'Farras Raihan Akbar Firmansyah',
+  eyebrow: 'Computer Engineering · BINUS University',
+  thesis: 'I need a room full of mirrors so I can be surrounded by winners.',
+  thesisBy: 'Kanye West',  // EDIT: credit for the quote above
+  pfp: '__PFP__',  // EDIT: swap for a path like 'img/pfp.jpg' once deployed
+  portrait: '__IMG:portrait__', portraitRatio: __R:portrait__,
+  sticker: 'Hi, my name is Farras',
+  passion: 'graphic design is my passion',
+  aboutTitle: 'Half designer. Half engineer.',
+  about: 'Computer Engineering student at BINUS University. Three years in PDD, making posters, key visuals and event documentation. On the other side: circuits, microcontrollers and code. This portfolio is where the two meet.',
+  design: ['PDD · 3 years', 'Posters & key visuals', 'Photo documentation', 'Collage & halftone'],
+  tools: ['Photoshop', 'Premiere Pro', 'Lightroom'],  // EDIT: add the green "a" app here
+  camera: 'Sony a6000',
+  tech: ['Embedded C · ATmega328P', 'Analog circuits', 'HTML · CSS · JavaScript', 'Prototyping & testing'],
+  heading: 'Heading toward → AI engineering',
+};
+
+/* Now playing on the cover. On the live website the record plays the real track
+   through Spotify's official embed player. Inside a sandboxed preview, where
+   Spotify can't load, it falls back to an original synth loop. EDIT freely:
+   spotifyId is the code at the end of a Spotify track link. */
+const MUSIC = {
+  label: 'Now playing',
+  bpm: 78,
+  track: 'White Ferrari',
+  artist: 'Frank Ocean',
+  spotifyId: '2LMkwUfqC6S6s6qDVlEuzV',
+  href: 'https://open.spotify.com/track/2LMkwUfqC6S6s6qDVlEuzV',
+};
+
+const SOCIALS = [
+  { k: 'IG', v: '@farras.rhnaf', href: 'https://instagram.com/farras.rhnaf' },
+  { k: 'ART', v: '@rraswrld', href: 'https://instagram.com/rraswrld' },
+  { k: 'GH', v: 'slickboiras', href: 'https://github.com/slickboiras' },
+];
+
+/* Design works. Images get dithered automatically; hover shows the original.
+   ratio = width / height, r = tilt in degrees, src: null shows a generated placeholder. */
+const WORKS = [
+  { title: 'Antagonist Tour', type: 'Tour poster', src: '__IMG:antagonist__', ratio: __R:antagonist__, r: -2.5 },
+  { title: 'The Last Day of Pompeii', type: 'Art poster', src: '__IMG:pompeii__', ratio: __R:pompeii__, r: 1.8 },
+  { title: 'Aerox', type: 'Product poster', src: '__IMG:aerox__', ratio: __R:aerox__, r: -1.2 },
+  { title: 'Utopia', type: 'Tracklist poster', src: '__IMG:utopia__', ratio: __R:utopia__, r: 2.4 },
+];
+
+/* Documentation photos, laid out in 3 columns (col: 0-2). EDIT the titles. */
+const PHOTOS = [
+  { title: 'Dance performance', type: 'Event', src: '__IMG:dance__', ratio: __R:dance__, r: -1.5, col: 0 },
+  { title: 'Skyline', type: 'Street', src: '__IMG:building__', ratio: __R:building__, r: 1.4, col: 0 },
+  { title: 'Basketball', type: 'Sports', src: '__IMG:basket__', ratio: __R:basket__, r: 1.2, col: 1 },
+  { title: 'Stage show', type: 'Event', src: '__IMG:stage__', ratio: __R:stage__, r: -2, col: 1 },
+  { title: 'Station', type: 'Street', src: '__IMG:mrt__', ratio: __R:mrt__, r: 1.8, col: 2 },
+  { title: 'Cafe corner', type: 'Street', src: '__IMG:cafe__', ratio: __R:cafe__, r: -1, col: 2 },
+];
+const CAMERA_IMG = '__IMG:camera__';
+
+/* Tech projects. schem is the block diagram shown in X-ray mode. */
+const PROJECTS = [
+  {
+    title: 'Smart Watering System', status: 'Final project',
+    blurb: 'Waters plants on its own, using soil moisture and light readings to decide when the pump runs.',
+    tags: ['ATmega328P', 'Capacitive soil sensor', 'BH1750', '3–5 V pump'],
+    schem:
+`[soil sensor]──┐
+               ├──▶ [ATmega328P] ──▶ [driver] ──▶ (pump)
+[BH1750 lux]───┘         │
+                     threshold
+                     logic`,
+  },
+  {
+    title: 'Analog Heart-Rate Monitor', status: 'Course project',
+    blurb: 'Reads a pulse with discrete and analog ICs only. No microcontroller in the signal path.',
+    tags: ['Analog ICs', 'Filtering', 'Amplification'],
+    schem:
+`(finger) ──▶ [sensor] ──▶ [filter] ──▶ [amp] ──▶ [output]
+                                   EDIT: match your real stages`,
+  },
+  {
+    title: 'Smart Trash Can', status: 'Semester 1',
+    blurb: 'My first build. An ultrasonic sensor measures distance, and when a hand comes close the Arduino opens the lid, so nobody has to touch it.',
+    tags: ['Arduino Uno', 'Ultrasonic sensor', 'C++'],
+    schem:
+`(hand) ··▶ [ultrasonic] ──▶ [Arduino Uno] ──▶ [lid motor]
+             echo → cm      distance < limit?
+                            EDIT: match your parts`,
+  },
+  {
+    title: 'This portfolio', status: 'Live',
+    blurb: 'A design-tool interface on an infinite canvas, with a live dither texture and a tech mode that shows its own construction.',
+    tags: ['Canvas 2D', 'Ordered dithering', 'Vanilla JS'],
+    schem:
+`pointer ──▶ [tool router] ──▶ camera {x, y, zoom}
+                 │                  │
+                 ▼                  ▼
+          [pen / dropper]    [world transform]
+                 │
+                 ▼
+          [accent → palette] ──▶ re-dither`,
+  },
+];
+
+const CONTACT = [
+  { k: 'Email', v: 'farras.raf12@gmail.com', copy: true },
+  { k: 'Instagram', v: '@farras.rhnaf', href: 'https://instagram.com/farras.rhnaf' },
+  { k: 'Art', v: '@rraswrld', href: 'https://instagram.com/rraswrld' },
+  { k: 'GitHub', v: 'slickboiras', href: 'https://github.com/slickboiras' },
+  { k: 'LinkedIn', v: 'in/farras-raihan-akbar', href: 'https://www.linkedin.com/in/farras-raihan-akbar-b9515b333' },
+  { k: 'Discord', v: 'Open profile', href: 'https://discord.com/users/611947839626412033' },
+];
+
+/* Artboard positions in world space (px). Drag a board's label to move it. */
+const BOARDS = [
+  { id: 'cover', name: 'Cover', x: 0, y: 0, w: 1100, h: 680 },
+  { id: 'about', name: 'About', x: 1180, y: 0, w: 700, h: 720 },
+  { id: 'works', name: 'Designs', x: 0, y: 860, w: 1100, h: 660 },
+  { id: 'docs', name: 'Documentation', x: 0, y: 1620, w: 1100, h: 920 },
+  { id: 'tech', name: 'Tech Projects', x: 1180, y: 860, w: 1340, h: 860 },
+  { id: 'contact', name: 'Contact', x: 1960, y: 0, w: 560, h: 780 },
+];
+
+/* =====================================================================
+   ENGINE
+   ===================================================================== */
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const stage = $('#stage'), world = $('#world'), selBox = $('#sel');
+let xray = false;
+
+/* ---------- Bayer matrix (ordered dither thresholds) ---------- */
+function bayer(n) {
+  let m = [[0]];
+  while (m.length < n) {
+    const s = m.length, r = [];
+    for (let y = 0; y < s * 2; y++) {
+      r.push([]);
+      for (let x = 0; x < s * 2; x++) {
+        const q = y < s ? (x < s ? 0 : 2) : (x < s ? 3 : 1);
+        r[y].push(m[y % s][x % s] * 4 + q);
+      }
+    }
+    m = r;
+  }
+  return m.flat().map(v => (v + .5) / (n * n));
+}
+const BAYER = bayer(8);
+
+/* ---------- color helpers ---------- */
+function hexToRgb(h) { h = h.replace('#', ''); if (h.length === 3) h = [...h].map(c => c + c).join(''); const n = parseInt(h, 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+function rgbToHex(r, g, b) { return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join(''); }
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2; let h = 0, s = 0;
+  if (mx !== mn) {
+    const d = mx - mn; s = l > .5 ? d / (2 - mx - mn) : d / (mx + mn);
+    h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; h *= 60;
+  }
+  return [h, s * 100, l * 100];
+}
+function hsl(h, s, l) { // -> hex
+  s /= 100; l /= 100;
+  const k = n => (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
+  const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return rgbToHex(f(0) * 255, f(8) * 255, f(4) * 255);
+}
+function parseCss(c) { const m = c.match(/[\d.]+/g); return m ? m.slice(0, 3).map(Number) : [0, 0, 0]; }
+const lum = ([r, g, b]) => (.2126 * r + .7152 * g + .0722 * b) / 255;
+
+/* ---------- palette (eyedropper drives this) ---------- */
+const DEFAULT_ACCENT = '#9ccc87';
+const PAL = {};
+function setAccent(hex, quiet) {
+  const rgb = hexToRgb(hex); let [h, s, l] = rgbToHsl(...rgb);
+  // keep the accent readable on the dark chrome
+  l = clamp(l, 52, 78); s = Math.min(s, 85);
+  const acc = hsl(h, s, l), ts = Math.min(s, 45);
+  Object.assign(PAL, {
+    accent: acc, h,
+    bg0: hsl(h, Math.min(ts, 30), 7), bg1: hsl(h, Math.min(ts, 35), 16),
+    paper: hsl(h, Math.min(ts, 18), 90), ink: hsl(h, Math.min(ts, 25), 7), deep: hsl(h, Math.min(ts, 25), 6),
+  });
+  const r = document.documentElement.style;
+  r.setProperty('--accent', acc);
+  r.setProperty('--accent-ink', lum(hexToRgb(acc)) > .45 ? PAL.ink : PAL.paper);
+  r.setProperty('--bg-0', PAL.bg0); r.setProperty('--bg-1', PAL.bg1);
+  r.setProperty('--paper', PAL.paper); r.setProperty('--ink', PAL.ink); r.setProperty('--deep', PAL.deep);
+  r.setProperty('--panel', hsl(h, Math.min(ts, 22), 8) + 'e6');
+  r.setProperty('--line', hsl(h, Math.min(ts, 18), 22));
+  r.setProperty('--fg', hsl(h, Math.min(ts, 18), 90));
+  r.setProperty('--muted', hsl(h, Math.min(ts, 12), 62));
+  bgColors = [hexToRgb(PAL.bg0), hexToRgb(PAL.bg1)];
+  redither();
+  if (!quiet) renderInspector();
+}
+
+/* ---------- dithering of images ---------- */
+const dithers = []; // {src: canvas|img, out: canvas, cell, kind}
+function ditherOne(d) {
+  const { src, out, cell } = d;
+  const sw = src.naturalWidth || src.width, sh = src.naturalHeight || src.height;
+  if (!sw) return;
+  const w = Math.max(1, Math.round(sw / cell)), h = Math.max(1, Math.round(sh / cell));
+  out.width = w; out.height = h;
+  const ctx = out.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(src, 0, 0, w, h);
+  const id = ctx.getImageData(0, 0, w, h), p = id.data;
+  // duotone inks: art mode uses the board palette, x-ray uses blueprint blues
+  const ink = xray ? [22, 34, 150] : hexToRgb(d.kind === 'work' ? PAL.deep : PAL.ink);
+  const paper = xray ? [140, 214, 242] : hexToRgb(d.kind === 'paper' ? PAL.paper : PAL.accent);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4;
+    let L = (.299 * p[i] + .587 * p[i + 1] + .114 * p[i + 2]) / 255;
+    L = clamp((L - .5) * 1.3 + .52, 0, 1);
+    const c = L > BAYER[((y & 7) << 3) | (x & 7)] ? paper : ink;
+    p[i] = c[0]; p[i + 1] = c[1]; p[i + 2] = c[2]; p[i + 3] = 255;
+  }
+  ctx.putImageData(id, 0, 0);
+}
+function redither() { dithers.forEach(ditherOne); }
+
+/* ---------- procedural placeholders (colorful on purpose: try the eyedropper) ---------- */
+function rng(seed) { return () => (seed = (seed * 16807) % 2147483647) / 2147483647; }
+function placeholder(i) {
+  const c = document.createElement('canvas'); c.width = 640; c.height = 480;
+  const g = c.getContext('2d'), R = rng(i * 977 + 13), W = 640, H = 480;
+  const disp = '800 120px "Bricolage Grotesque", sans-serif';
+  if (i === 0) {
+    g.fillStyle = '#ff6a2b'; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#141414'; g.beginPath(); g.arc(420, 230, 170, 0, 7); g.fill();
+    g.fillStyle = '#f4efe2'; g.font = disp; g.fillText('POSTER', 30, 440);
+    g.fillStyle = '#2b5cff'; g.fillRect(40, 40, 120, 120);
+  } else if (i === 1) {
+    g.fillStyle = '#f2ead8'; g.fillRect(0, 0, W, H);
+    const cols = ['#e83f6f', '#2274a5', '#ffbf00', '#32936f', '#141414'];
+    for (let k = 0; k < 14; k++) {
+      g.save(); g.translate(R() * W, R() * H); g.rotate((R() - .5) * 1.2);
+      g.fillStyle = cols[k % 5]; g.fillRect(-90 * R() - 40, -60 * R() - 30, 180 * R() + 60, 120 * R() + 50); g.restore();
+    }
+  } else if (i === 2) {
+    const gr = g.createLinearGradient(0, 0, 0, H);
+    gr.addColorStop(0, '#2d0b59'); gr.addColorStop(.55, '#ff4f79'); gr.addColorStop(1, '#ffd166');
+    g.fillStyle = gr; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#ffd166'; g.beginPath(); g.arc(W / 2, 300, 120, Math.PI, 0); g.fill();
+    g.fillStyle = '#2d0b59'; for (let k = 0; k < 7; k++) g.fillRect(0, 300 + k * 26, W, 10 + k * 2);
+  } else if (i === 3) {
+    g.fillStyle = '#f4f1ea'; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#111'; g.font = '800 210px "Bricolage Grotesque", sans-serif'; g.fillText('Aa', 30, 300);
+    g.fillStyle = '#d7263d'; g.fillRect(380, 40, 220, 400);
+    g.fillStyle = '#111'; for (let k = 0; k < 9; k++) g.fillRect(40, 340 + k * 14, 300 - (k % 3) * 60, 5);
+  } else if (i === 4) {
+    g.fillStyle = '#0e7c66'; g.fillRect(0, 0, W, H);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 10; x++) {
+      g.fillStyle = (x + y) % 3 ? '#f7e6c4' : '#ff7f11';
+      g.beginPath(); g.arc(40 + x * 64, 30 + y * 60, 6 + ((x * y) % 5) * 5, 0, 7); g.fill();
+    }
+  } else {
+    g.fillStyle = '#e9ecf5'; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#3a36db'; g.fillRect(40, 40, 560, 70);
+    g.fillStyle = '#c8cde0'; for (let k = 0; k < 3; k++) g.fillRect(40 + k * 192, 140, 176, 210);
+    g.fillStyle = '#ff5c8a'; g.fillRect(40, 380, 220, 56);
+    g.fillStyle = '#1b1b2f'; g.fillRect(70, 170, 110, 12); g.fillRect(262, 170, 110, 12); g.fillRect(454, 170, 110, 12);
+  }
+  return c;
+}
+
+/* ---------- build artboards ---------- */
+const frameHTML = (set, it, i, kind) => `
+  <div class="work tilt" style="--r:${it.r || 0}deg">
+    <div class="frame" data-set="${set}" data-i="${i}" data-kind="${kind}" data-name="${esc(it.title)}" style="aspect-ratio:${it.ratio || 4 / 3}">${it.src ? '' : '<span class="chip">Placeholder</span>'}<canvas class="dith"></canvas></div>
+    <div class="work-cap"><span>${esc(it.title)}</span><small>${esc(it.type)}${it.year ? ' · ' + esc(it.year) : ''}</small></div>
+  </div>`;
+
+function boardHTML(b) {
+  if (b.id === 'cover') return `
+    <div class="cover">
+      <div>
+        <div class="eyebrow">${esc(PROFILE.eyebrow)}</div>
+        <h1 aria-label="${esc(PROFILE.short)}">${[...PROFILE.short].map((c, i) => `<span class="ch" data-i="${i}" aria-hidden="true">${esc(c)}</span>`).join('')}</h1>
+        <blockquote><div class="qwrap"><p class="thesis">“${esc(PROFILE.thesis)}”</p><p class="thesis mirror" aria-hidden="true">“${esc(PROFILE.thesis)}”</p></div><cite>— ${esc(PROFILE.thesisBy)}</cite></blockquote>
+      </div>
+      <figure class="pfp" data-name="Profile picture">
+        <img src="${PROFILE.pfp}" alt="Farras's profile artwork: a halftone sports car in front of a wall of speakers">
+        <canvas class="dith" data-kind="pfp"></canvas>
+        <figcaption class="pfp-cap">hover to see the original</figcaption>
+      </figure>
+      <div class="socials">${SOCIALS.map(s => `<a href="${s.href}" target="_blank" rel="noopener">${s.k} ${esc(s.v)}</a>`).join('')}</div>
+      <div class="np">
+        <button class="deck" id="deck" aria-pressed="false" aria-label="Play the cover loop">
+          <span class="slide"><span class="disc"></span></span>
+          <span class="sleeve"><span>F.</span></span>
+        </button>
+        <div class="np-meta">
+          <div class="np-k">${esc(MUSIC.label)} · <span id="npState">tap the record</span></div>
+          <div class="np-title">${esc(MUSIC.track)}</div>
+          <div class="np-artist">${esc(MUSIC.artist)} · <a href="${MUSIC.href}" target="_blank" rel="noopener">Spotify ↗</a></div>
+          <canvas class="eq" id="eq" width="100" height="16" aria-hidden="true"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="note" style="left:64px;top:16px">art: Bricolage Grotesque · weight 800→320 near cursor · tech: Jersey 10</div>
+    <div class="note" style="right:64px;top:94px">1-bit ordered dither · Bayer 8×8 · 160 × 160 px</div>
+    <div class="note" style="left:64px;bottom:10px">Web Audio synth · ${MUSIC.bpm} BPM · Fmaj9 → Em7 → Dm9 → Cmaj9 · original loop</div>`;
+  if (b.id === 'about') return `
+    <div class="about">
+      <h2>${esc(PROFILE.aboutTitle)}</h2>
+      <div class="about-row">
+        <p>${esc(PROFILE.about)}</p>
+        <figure class="sticker">
+          <span class="tag">${esc(PROFILE.sticker)}</span>
+          <div class="frame" data-set="about" data-i="0" data-kind="paper" data-name="Portrait" style="aspect-ratio:${PROFILE.portraitRatio}"><canvas class="dith"></canvas></div>
+          <small>${esc(PROFILE.passion)}</small>
+        </figure>
+      </div>
+      <div class="skills">
+        <div><h3>Design</h3><ul>${PROFILE.design.map(s => `<li>${esc(s)}</li>`).join('')}</ul></div>
+        <div><h3>Tech</h3><ul>${PROFILE.tech.map(s => `<li>${esc(s)}</li>`).join('')}</ul></div>
+      </div>
+      <div class="tools"><b>Tools</b>${PROFILE.tools.map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div>
+      <div class="heading">${esc(PROFILE.heading)}</div>
+    </div>
+    <div class="note" style="right:40px;top:40px">fill = accent · picks up the eyedropper</div>`;
+  if (b.id === 'works') return `
+    <canvas class="scrib" data-seed="7"></canvas>
+    <div class="works">
+      <div class="sec-head"><h2 class="shout fuzz">Designszz</h2><p>${WORKS.length} pieces · hover for the real colors<br>eyedropper a piece to retheme the site<br>more at <a href="${SOCIALS[1].href}" target="_blank" rel="noopener">${esc(SOCIALS[1].v)}</a> ↗</p></div>
+      <div class="wgrid">${WORKS.map((w, i) => frameHTML('works', w, i, 'work')).join('')}</div>
+    </div>
+    <div class="note" style="right:56px;top:20px">4 columns · each frame keeps its poster's ratio · 1-bit until hover</div>`;
+  if (b.id === 'docs') return `
+    <canvas class="scrib" data-seed="21"></canvas>
+    <div class="docs">
+      <div class="sec-head" style="justify-content:flex-start"><h2 class="shout fuzz" style="font-size:96px">Documentation</h2></div>
+      <div class="pgrid">${[0, 1, 2].map(c => `<div class="pcol">${PHOTOS.map((p, i) => (p.col || 0) === c ? frameHTML('photos', p, i, 'pfp') : '').join('')}</div>`).join('')}</div>
+    </div>
+    <button class="cam" id="camBtn" aria-label="Take a photo"><img src="${CAMERA_IMG}" alt=""><small>i use ${esc(PROFILE.camera)} · click me</small></button>
+    <div class="note" style="left:56px;top:20px">3 columns · photos keep their ratio · camera = flash + shutter sound</div>`;
+  if (b.id === 'tech') return `
+    <div class="tech">
+      <div class="sec-head"><h2>Tech<br>projects</h2><p>${PROJECTS.length} builds<br>switch to TECH to see the block diagrams<br>code at <a href="${SOCIALS[2].href}" target="_blank" rel="noopener">github.com/${esc(SOCIALS[2].v)}</a> ↗</p></div>
+      <div class="cards">${PROJECTS.map(p => `
+        <article class="card${p.ghost ? ' ghost' : ''}">
+          <span class="status">${esc(p.status)}</span>
+          <h3>${esc(p.title)}</h3>
+          <p>${esc(p.blurb)}</p>
+          <pre class="schem">${esc(p.schem)}</pre>
+          <div class="tags">${p.tags.map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div>
+        </article>`).join('')}</div>
+    </div>`;
+  if (b.id === 'contact') return `
+    <div class="contact">
+      <div class="eyebrow">Contact</div>
+      <h2>Let's make something.</h2>
+      <div class="rows">${CONTACT.map(c => `
+        <div class="row"><span>${esc(c.k)}</span>
+          ${c.href ? `<a href="${c.href}" target="_blank" rel="noopener">${esc(c.v)}</a><span>↗</span>`
+                   : `<code>${esc(c.v)}</code><button class="mini" data-copy="${esc(c.v)}">Copy</button>`}
+        </div>`).join('')}</div>
+    </div>
+    <div class="note" style="left:56px;top:372px">links open in a new tab · email copies to clipboard</div>`;
+  return '';
+}
+
+const boardEls = {};
+BOARDS.forEach(b => {
+  const el = document.createElement('section');
+  el.className = 'ab'; el.id = 'ab-' + b.id;
+  el.innerHTML = `
+    <div class="ab-label" data-drag="${b.id}"><b>${esc(b.name)}</b><span class="dims"></span></div>
+    <div class="meas mw"><span></span></div><div class="meas mh"><span></span></div>
+    <div class="ab-body">${boardHTML(b)}</div>`;
+  world.insertBefore(el, selBox);
+  boardEls[b.id] = el;
+  placeBoard(b);
+});
+function placeBoard(b) {
+  const el = boardEls[b.id];
+  Object.assign(el.style, { left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' });
+  el.querySelector('.dims').textContent = `${b.w} × ${b.h}`;
+  el.querySelector('.mw span').textContent = b.w;
+  el.querySelector('.mh span').textContent = b.h;
+}
+
+/* hook up dither canvases */
+function registerDithers() {
+  const pfpImg = document.querySelector('.pfp img');
+  const pfpOut = document.querySelector('.pfp .dith');
+  const d = { src: pfpImg, out: pfpOut, cell: 2, kind: 'pfp' };
+  dithers.push(d);
+  if (pfpImg.complete) ditherOne(d); else pfpImg.onload = () => ditherOne(d);
+
+  const SETS = { works: WORKS, photos: PHOTOS, about: [{ title: 'Portrait', src: PROFILE.portrait }] };
+  document.querySelectorAll('.frame').forEach(fr => {
+    const w = SETS[fr.dataset.set][fr.dataset.i];
+    const out = fr.querySelector('.dith');
+    let src;
+    const rec = { src: null, out, cell: fr.dataset.set === 'about' ? 3 : 4, kind: fr.dataset.kind };
+    if (w.src) {
+      src = new Image(); src.className = 'src'; src.alt = w.title;
+      src.onload = () => ditherOne(rec); src.src = w.src;
+    } else {
+      src = placeholder(+fr.dataset.i); src.className = 'src';
+    }
+    rec.src = src;
+    fr.insertBefore(src, out);
+    dithers.push(rec);
+    if (!w.src) ditherOne(rec);
+  });
+  document.querySelectorAll('.scrib').forEach(c => scribble(c, +c.dataset.seed));
+}
+
+/* ---------- camera ---------- */
+const cam = { x: 0, y: 0, z: 1 };
+function viewRect() {
+  const W = innerWidth, H = innerHeight, phone = W <= 760;
+  const l = phone ? 12 : 72, t = 60, r = phone ? 12 : 290, bt = phone ? 76 : 40;
+  return { x: l, y: t, w: Math.max(100, W - l - r), h: Math.max(100, H - t - bt) };
+}
+function applyCam() {
+  world.style.transform = `translate(${cam.x}px,${cam.y}px) scale(${cam.z})`;
+  document.documentElement.style.setProperty('--z', cam.z);
+  $('#zoomBtn').textContent = Math.round(cam.z * 100) + '%';
+  bgDirty = true;
+}
+const toWorld = (sx, sy) => [(sx - cam.x) / cam.z, (sy - cam.y) / cam.z];
+function camFor(r, pad = 40) {
+  const v = viewRect();
+  pad = Math.min(pad, v.w * .04);
+  const z = clamp(Math.min((v.w - pad * 2) / r.w, (v.h - pad * 2) / r.h), .05, 2.5);
+  return { z, cx: r.x + r.w / 2, cy: r.y + r.h / 2 };
+}
+function setCenter(cx, cy, z) {
+  const v = viewRect();
+  cam.z = z; cam.x = v.x + v.w / 2 - cx * z; cam.y = v.y + v.h / 2 - cy * z; applyCam();
+}
+let flight = null;
+function flyTo(r, pad, dur = 750) {
+  const t = camFor(r, pad), v = viewRect();
+  const from = { cx: (v.x + v.w / 2 - cam.x) / cam.z, cy: (v.y + v.h / 2 - cam.y) / cam.z, z: cam.z };
+  if (REDUCED) { setCenter(t.cx, t.cy, t.z); return; }
+  const t0 = performance.now();
+  cancelAnimationFrame(flight);
+  const step = now => {
+    const k = clamp((now - t0) / dur, 0, 1), e = k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+    // zoom out a little mid-flight, like a camera hop
+    const dip = Math.sin(Math.PI * e) * .18;
+    const z = Math.exp(Math.log(from.z) + (Math.log(t.z) - Math.log(from.z)) * e) * (1 - dip);
+    setCenter(from.cx + (t.cx - from.cx) * e, from.cy + (t.cy - from.cy) * e, z);
+    if (k < 1) flight = requestAnimationFrame(step);
+  };
+  flight = requestAnimationFrame(step);
+}
+function bounds() {
+  const xs = BOARDS.map(b => b.x), ys = BOARDS.map(b => b.y);
+  const x = Math.min(...xs), y = Math.min(...ys);
+  return { x, y, w: Math.max(...BOARDS.map(b => b.x + b.w)) - x, h: Math.max(...BOARDS.map(b => b.y + b.h)) - y };
+}
+const fitAll = (instant) => instant ? (() => { const t = camFor(bounds(), 30); setCenter(t.cx, t.cy, t.z); })() : flyTo(bounds(), 30);
+function zoomAt(sx, sy, f) {
+  cancelAnimationFrame(flight);
+  const [wx, wy] = toWorld(sx, sy), z = clamp(cam.z * f, .05, 4);
+  cam.z = z; cam.x = sx - wx * z; cam.y = sy - wy * z; applyCam();
+}
+const boardAt = (wx, wy) => BOARDS.slice().reverse().find(b => wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h);
+
+/* ---------- selection, layers, inspector ---------- */
+let selected = null;
+function select(id) {
+  selected = id;
+  document.querySelectorAll('.ab').forEach(e => e.classList.toggle('selected', e.id === 'ab-' + id));
+  document.querySelectorAll('#layers button').forEach(bt => bt.setAttribute('aria-current', bt.dataset.id === id));
+  placeSel(); renderInspector();
+}
+function placeSel() {
+  const b = BOARDS.find(b => b.id === selected);
+  if (!b) { selBox.style.display = 'none'; return; }
+  Object.assign(selBox.style, { display: 'block', left: b.x + 'px', top: b.y + 'px', width: b.w + 'px', height: b.h + 'px' });
+  const pts = [[0, 0], [50, 0], [100, 0], [100, 50], [100, 100], [50, 100], [0, 100], [0, 50]];
+  selBox.querySelectorAll('i').forEach((h, k) => { h.style.left = pts[k][0] + '%'; h.style.top = pts[k][1] + '%'; });
+}
+const layersEl = $('#layers');
+const ORDER = ['cover', 'about', 'works', 'docs', 'tech', 'contact'];
+ORDER.forEach((id, k) => {
+  const b = BOARDS.find(b => b.id === id);
+  const li = document.createElement('li');
+  li.innerHTML = `<button data-id="${id}" aria-current="false"><span class="ico">#</span><span>${esc(b.name)}</span><small>${k + 1}</small></button>`;
+  layersEl.appendChild(li);
+});
+layersEl.addEventListener('click', e => {
+  const bt = e.target.closest('button'); if (!bt) return;
+  goBoard(bt.dataset.id);
+  $('#side').classList.remove('open'); $('#layersBtn').setAttribute('aria-expanded', 'false');
+});
+function goBoard(id) { const b = BOARDS.find(b => b.id === id); select(id); flyTo(b, 36); }
+
+function renderInspector() {
+  const b = BOARDS.find(b => b.id === selected);
+  const fill = b ? getComputedStyle(boardEls[b.id]).backgroundColor : null;
+  const fillHex = fill && !/rgba\(0, 0, 0, 0\)|transparent/.test(fill) ? rgbToHex(...parseCss(fill)) : 'none';
+  const acc = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  $('#props').innerHTML = (b ? `
+    <div class="prop wide"><span>Layer</span>${esc(b.name)}</div>
+    <div class="prop"><span>X</span>${Math.round(b.x)}</div><div class="prop"><span>Y</span>${Math.round(b.y)}</div>
+    <div class="prop"><span>W</span>${b.w}</div><div class="prop"><span>H</span>${b.h}</div>
+    <div class="prop wide"><span>Fill</span><span><i class="sw" style="background:${fillHex === 'none' ? 'transparent' : fillHex}"></i>${fillHex}</span></div>`
+    : `<div class="prop wide"><span>Layer</span>none</div>`) + `
+    <div class="prop wide"><span>Accent</span><span><i class="sw" style="background:${acc}"></i>${acc}</span></div>
+    <div class="prop wide"><span>Mode</span>${xray ? 'Tech · engineer' : 'Art · designer'}</div>
+    <div class="prop wide" style="background:none;padding-top:0"><span></span><button id="resetAccent">reset accent</button></div>`;
+}
+$('#props').addEventListener('click', e => { if (e.target.id === 'resetAccent') { setAccent(DEFAULT_ACCENT); toast('Accent reset to the original green'); } });
+
+/* ---------- toast ---------- */
+let toastT;
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+/* ---------- tools ---------- */
+let tool = 'move', spaceHand = false;
+const TOOL_HINT = {
+  move: 'Move: click a board to select it, drag its label to move it.',
+  hand: 'Hand: drag anywhere to pan.',
+  pen: 'Pen: draw a line that ends on any board to fly there.',
+  drop: 'Eyedropper: click any color. The whole site follows it.',
+  zoom: 'Zoom: click to zoom in, Alt-click to zoom out.',
+};
+function setTool(t, silent) {
+  tool = t;
+  document.querySelectorAll('.tool').forEach(b => b.setAttribute('aria-pressed', b.dataset.tool === t));
+  updateCursor();
+  $('#loupe').style.display = 'none';
+  if (!silent) toast(TOOL_HINT[t]);
+}
+const DROP_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M14 6l4 4M5 19l1-4 9-9 3 3-9 9z" fill="white" stroke="black" stroke-width="1.6"/></svg>')}") 3 21, crosshair`;
+function updateCursor() {
+  const t = spaceHand ? 'hand' : tool;
+  stage.style.cursor = { move: 'default', hand: 'grab', pen: 'crosshair', drop: DROP_CURSOR, zoom: 'zoom-in' }[t];
+}
+$('#tools').addEventListener('click', e => { const b = e.target.closest('.tool'); if (b) setTool(b.dataset.tool); });
+
+/* ---------- pointer handling ---------- */
+const pointers = new Map();
+let drag = null, pinch = null, penPts = null;
+const isUI = el => el.closest('a, button, code, input');
+
+stage.addEventListener('pointerdown', e => {
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  cancelAnimationFrame(flight); userMoved = true;
+  if (pointers.size === 2) { // pinch
+    const [a, b] = [...pointers.values()];
+    pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+    drag = null; penPts = null; clearPen(); return;
+  }
+  const t = spaceHand ? 'hand' : tool, target = e.target;
+  if (t === 'move' && isUI(target)) return; // let links/buttons work
+  const label = target.closest('.ab-label');
+  if (t === 'move' && label) {
+    const b = BOARDS.find(b => b.id === label.dataset.drag); select(b.id);
+    drag = { mode: 'board', b, sx: e.clientX, sy: e.clientY, ox: b.x, oy: b.y, moved: false };
+    stage.setPointerCapture(e.pointerId); return;
+  }
+  if (t === 'pen') { penPts = [[e.clientX, e.clientY]]; stage.setPointerCapture(e.pointerId); drawPen(); return; }
+  if (t === 'drop') { pickColor(e.clientX, e.clientY, true); return; }
+  if (t === 'zoom') { zoomAt(e.clientX, e.clientY, e.altKey || e.shiftKey ? 1 / 1.6 : 1.6); return; }
+  // move (empty or board body) and hand: pan
+  drag = { mode: 'pan', sx: e.clientX, sy: e.clientY, cx: cam.x, cy: cam.y, moved: false, target, pid: e.pointerId };
+  if (t === 'hand') stage.style.cursor = 'grabbing';
+});
+
+stage.addEventListener('pointermove', e => {
+  const [wx, wy] = toWorld(e.clientX, e.clientY);
+  $('#sx').textContent = Math.round(wx); $('#sy').textContent = Math.round(wy);
+  mouse.x = e.clientX; mouse.y = e.clientY;
+  if (!pointers.has(e.pointerId)) { if (tool === 'drop') pickColor(e.clientX, e.clientY, false); return; }
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch && pointers.size >= 2) {
+    const [a, b] = [...pointers.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    cam.x += mx - pinch.mx; cam.y += my - pinch.my;
+    zoomAt(mx, my, d / pinch.d);
+    pinch = { d, mx, my }; return;
+  }
+  if (penPts) { penPts.push([e.clientX, e.clientY]); drawPen(); return; }
+  if (tool === 'drop') pickColor(e.clientX, e.clientY, false);
+  if (!drag) return;
+  const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+  if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+  if (!drag.moved) { drag.moved = true; if (drag.pid != null) stage.setPointerCapture(drag.pid); }
+  if (drag.mode === 'pan') { cam.x = drag.cx + dx; cam.y = drag.cy + dy; applyCam(); }
+  else { drag.b.x = Math.round(drag.ox + dx / cam.z); drag.b.y = Math.round(drag.oy + dy / cam.z); placeBoard(drag.b); placeSel(); renderInspector(); }
+});
+
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (pinch) { if (pointers.size < 2) pinch = null; return; }
+  if (penPts) { finishPen(); penPts = null; }
+  if (drag) {
+    if (!drag.moved && drag.mode === 'pan' && (spaceHand ? 'hand' : tool) === 'move') {
+      const [wx, wy] = toWorld(e.clientX, e.clientY), b = boardAt(wx, wy);
+      // a click on an image frame zooms into that piece
+      const piece = drag.target.closest('.frame, .pfp');
+      if (piece) zoomToEl(piece);
+      else if (b) select(b.id); else select(null);
+    }
+    drag = null; updateCursor();
+  }
+}
+stage.addEventListener('pointerup', endPointer);
+stage.addEventListener('pointercancel', endPointer);
+stage.addEventListener('dblclick', e => {
+  if (tool !== 'move') return;
+  const [wx, wy] = toWorld(e.clientX, e.clientY), b = boardAt(wx, wy);
+  if (b && !isUI(e.target)) goBoard(b.id);
+});
+stage.addEventListener('pointerleave', () => { $('#loupe').style.display = 'none'; mouse.x = -1e4; });
+
+function zoomToEl(el) {
+  // convert an element's screen rect into world space and fly there
+  const r = el.getBoundingClientRect(), [x, y] = toWorld(r.left, r.top);
+  el.classList.add('reveal'); setTimeout(() => el.classList.remove('reveal'), 2200);
+  flyTo({ x, y, w: r.width / cam.z, h: r.height / cam.z }, 50);
+}
+
+stage.addEventListener('wheel', e => {
+  e.preventDefault(); cancelAnimationFrame(flight); userMoved = true;
+  if (e.ctrlKey || e.metaKey) zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * .01));
+  else { cam.x -= e.deltaX; cam.y -= e.deltaY; applyCam(); }
+}, { passive: false });
+
+/* ---------- pen tool ---------- */
+const penSvg = $('#pen');
+function pathD(pts) {
+  if (pts.length < 2) return `M${pts[0][0]} ${pts[0][1]}`;
+  let d = `M${pts[0][0]} ${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const mx = (pts[i][0] + pts[i + 1][0]) / 2, my = (pts[i][1] + pts[i + 1][1]) / 2;
+    d += ` Q${pts[i][0]} ${pts[i][1]} ${mx} ${my}`;
+  }
+  const l = pts[pts.length - 1]; return d + ` L${l[0]} ${l[1]}`;
+}
+let liveG = null;
+function drawPen() {
+  if (!liveG) { liveG = document.createElementNS('http://www.w3.org/2000/svg', 'g'); penSvg.appendChild(liveG); }
+  const anchors = penPts.filter((_, i) => i % 14 === 0).concat([penPts[penPts.length - 1]]);
+  liveG.innerHTML = `<path d="${pathD(penPts)}"/>` + anchors.map(([x, y]) => `<rect x="${x - 4}" y="${y - 4}" width="8" height="8"/>`).join('');
+}
+function finishPen() {
+  const g = liveG; liveG = null; if (!g) return;
+  const [ex, ey] = penPts[penPts.length - 1], [wx, wy] = toWorld(ex, ey), b = boardAt(wx, wy);
+  if (b && penPts.length > 3) { goBoard(b.id); toast(`Pen → ${b.name}`); }
+  requestAnimationFrame(() => { g.style.opacity = 0; });
+  setTimeout(() => g.remove(), 1400);
+}
+function clearPen() { penSvg.innerHTML = ''; liveG = null; }
+
+/* ---------- eyedropper ---------- */
+function sampleAt(x, y) {
+  const els = document.elementsFromPoint(x, y);
+  for (const el of els) {
+    if (el.closest('#top, #tools, #side, #status, #loupe, #toast')) return null;
+    // images: read the full-color source, not the dither
+    const piece = el.closest('.frame, .pfp');
+    if (piece) {
+      const src = piece.querySelector('.src, img');
+      const r = piece.getBoundingClientRect();
+      const c = document.createElement('canvas'); c.width = c.height = 1;
+      const sw = src.naturalWidth || src.width, sh = src.naturalHeight || src.height;
+      const sx = (x - r.left) / r.width * sw, sy = (y - r.top) / r.height * sh;
+      const g = c.getContext('2d'); g.drawImage(src, sx, sy, 1, 1, 0, 0, 1, 1);
+      const p = g.getImageData(0, 0, 1, 1).data;
+      return { hex: rgbToHex(p[0], p[1], p[2]), from: piece.dataset.name };
+    }
+    if (el.id === 'bg' || el.id === 'stage') return { hex: rgbToHex(...bgColors[1]), from: 'Canvas' };
+    let n = el;
+    while (n && n !== stage) {
+      const c = getComputedStyle(n).backgroundColor;
+      if (c && !/rgba\(0, 0, 0, 0\)|transparent/.test(c)) {
+        const ab = n.closest('.ab'); return { hex: rgbToHex(...parseCss(c)), from: ab ? ab.querySelector('.ab-label b').textContent : 'Canvas' };
+      }
+      n = n.parentElement;
+    }
+  }
+  return null;
+}
+function pickColor(x, y, commit) {
+  const s = sampleAt(x, y), lp = $('#loupe');
+  if (!s) { lp.style.display = 'none'; return; }
+  lp.style.display = 'flex';
+  lp.style.left = clamp(x + 18, 8, innerWidth - 140) + 'px'; lp.style.top = clamp(y + 18, 8, innerHeight - 50) + 'px';
+  lp.querySelector('i').style.background = s.hex; lp.querySelector('span').textContent = s.hex;
+  if (commit) {
+    if (xray) { toast('Switch back to ART mode to recolor. Tech mode stays blue.'); return; }
+    setAccent(s.hex); toast(`Theme picked from ${s.from}: ${s.hex}`);
+  }
+}
+
+
+/* =====================================================================
+   COVER: letters, mirror quote, tilting pfp, and the record player
+   ===================================================================== */
+let beat = 0; // 0..1, bumped on every kick, decays each frame
+let AC = null, bus, analyser, freqData, timeData, playing = false, seqTimer = null, nextT = 0, stepI = 0, noiseBuf, crackleSrc;
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+// Fmaj9 → Em7 → Dm9 → Cmaj9 (MIDI notes, bass first)
+const CHORDS = [[41, 57, 60, 64, 67], [40, 55, 59, 62, 64], [38, 53, 57, 60, 64], [36, 52, 55, 59, 62]];
+const LETTER_NOTES = [72, 74, 76, 79, 81, 84, 86, 88]; // C major pentatonic, one per letter
+
+function ensureAudio() {
+  if (AC) return AC.resume();
+  AC = new (window.AudioContext || window.webkitAudioContext)();
+  bus = AC.createGain(); bus.gain.value = .55;
+  const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3000; // warm, a bit lo-fi
+  const comp = AC.createDynamicsCompressor();
+  analyser = AC.createAnalyser(); analyser.fftSize = 256; analyser.smoothingTimeConstant = .75;
+  freqData = new Uint8Array(analyser.frequencyBinCount); timeData = new Uint8Array(analyser.fftSize);
+  bus.connect(lp); lp.connect(comp); comp.connect(analyser); analyser.connect(AC.destination);
+  noiseBuf = AC.createBuffer(1, AC.sampleRate, AC.sampleRate);
+  const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return AC.resume();
+}
+function keys(m, t, dur, vel) { // electric-piano-ish voice: sine + soft octave triangle
+  const f = mtof(m), g = AC.createGain(), o1 = AC.createOscillator(), o2 = AC.createOscillator(), g2 = AC.createGain();
+  o1.type = 'sine'; o1.frequency.value = f; o2.type = 'triangle'; o2.frequency.value = f * 2.003; g2.gain.value = .16;
+  o1.connect(g); o2.connect(g2); g2.connect(g); g.connect(bus);
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vel, t + .012);
+  g.gain.exponentialRampToValueAtTime(vel * .35, t + .45); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+  o1.start(t); o2.start(t); o1.stop(t + dur + .05); o2.stop(t + dur + .05);
+}
+function noise(t, dur, type, freq, vel, q = .7) {
+  const s = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain();
+  s.buffer = noiseBuf; f.type = type; f.frequency.value = freq; f.Q.value = q;
+  s.connect(f); f.connect(g); g.connect(bus);
+  g.gain.setValueAtTime(vel, t); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+  s.start(t, Math.random() * .5); s.stop(t + dur + .02);
+}
+function kick(t) {
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.frequency.setValueAtTime(115, t); o.frequency.exponentialRampToValueAtTime(42, t + .16);
+  g.gain.setValueAtTime(.9, t); g.gain.exponentialRampToValueAtTime(.0001, t + .38);
+  o.connect(g); g.connect(bus); o.start(t); o.stop(t + .4);
+  setTimeout(() => { beat = 1; }, Math.max(0, (t - AC.currentTime) * 1000));
+}
+function schedule() {
+  const spb = 60 / MUSIC.bpm / 4; // one 16th note
+  while (nextT < AC.currentTime + .12) {
+    const s = stepI % 16, bar = Math.floor(stepI / 16) % 4, chord = CHORDS[bar];
+    const t = nextT + (s % 2 ? spb * .2 : 0); // lazy swing on the off 16ths
+    if (s === 0) chord.forEach((m, i) => keys(m, t + i * .014, 2.8, i ? .1 : .2));
+    if (s === 10) chord.slice(1).forEach((m, i) => keys(m, t + i * .01, 1.1, .05));
+    if (s === 0 || s === 7 || s === 10) kick(t);
+    if (s === 4 || s === 12) noise(t, .2, 'bandpass', 1900, .32);
+    if (s % 2 === 0) noise(t, .045, 'highpass', 8000, s % 4 ? .045 : .075);
+    nextT += spb; stepI++;
+  }
+}
+function setPlaying(on) {
+  const deck = $('#deck');
+  if (on) {
+    ensureAudio().then(() => {
+      playing = true; stepI = 0; nextT = AC.currentTime + .06;
+      clearInterval(seqTimer); seqTimer = setInterval(schedule, 25);
+      crackleSrc = AC.createBufferSource(); crackleSrc.buffer = noiseBuf; crackleSrc.loop = true; // vinyl hiss
+      const hp = AC.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 4000;
+      const cg = AC.createGain(); cg.gain.value = .012; crackleSrc.connect(hp); hp.connect(cg); cg.connect(bus); crackleSrc.start();
+    }).catch(() => toast('Sound is blocked in this browser.'));
+  } else {
+    playing = false; clearInterval(seqTimer);
+    try { crackleSrc && crackleSrc.stop(); } catch (_) {}
+  }
+  deck.classList.toggle('playing', on || spotifyPlaying); deck.setAttribute('aria-pressed', on);
+  deck.setAttribute('aria-label', on ? 'Stop the cover loop' : 'Play the cover loop');
+  $('#npState').textContent = on ? 'preview loop' : 'tap the record';
+  if (on) toast('Preview loop: the real song plays on the live site. Hover the letters to play notes.');
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden && playing) setPlaying(false); });
+
+function initCover() {
+  const cover = boardEls.cover, chars = [...cover.querySelectorAll('.ch')], pfp = cover.querySelector('.pfp');
+  $('#deck').addEventListener('click', () => {
+    if (spotify) { // live site: the real track
+      $('#dock').hidden = false;
+      spotify.togglePlay();
+      ensureAudio().catch(() => {}); // unlocks the letter notes too
+    } else setPlaying(!playing);
+  });
+  $('#dockClose').addEventListener('click', () => { try { spotify && spotify.pause(); } catch (_) {} $('#dock').hidden = true; });
+  loadSpotify();
+
+  // letters get lighter, wider and lift as the cursor gets close
+  cover.addEventListener('pointermove', e => {
+    if (REDUCED) return;
+    chars.forEach(c => {
+      const r = c.getBoundingClientRect();
+      const d = Math.hypot(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2)) / cam.z;
+      c.style.setProperty('--k', Math.max(0, 1 - d / 240).toFixed(3));
+    });
+  });
+  cover.addEventListener('pointerleave', () => chars.forEach(c => c.style.setProperty('--k', 0)));
+  // each letter is a key once sound is on
+  chars.forEach(c => c.addEventListener('pointerenter', () => {
+    c.classList.remove('pop'); void c.offsetWidth; c.classList.add('pop');
+    if (AC && AC.state === 'running') keys(LETTER_NOTES[c.dataset.i % LETTER_NOTES.length], AC.currentTime, 1.4, .14);
+  }));
+
+  // profile picture tilts toward the cursor, with a moving glare
+  pfp.addEventListener('pointermove', e => {
+    const r = pfp.getBoundingClientRect(), x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    pfp.style.setProperty('--ry', ((x - .5) * 16).toFixed(2) + 'deg');
+    pfp.style.setProperty('--rx', ((.5 - y) * 16).toFixed(2) + 'deg');
+    pfp.style.setProperty('--gx', (x * 100).toFixed(1) + '%'); pfp.style.setProperty('--gy', (y * 100).toFixed(1) + '%');
+  });
+  pfp.addEventListener('pointerleave', () => { pfp.style.setProperty('--rx', '0deg'); pfp.style.setProperty('--ry', '0deg'); });
+}
+
+/* red spray-marker strokes, like the ones across the PDF portfolio */
+function scribble(canvas, seed) {
+  const host = canvas.parentElement, W = canvas.width = Math.round(host.clientWidth / 2), H = canvas.height = Math.round(host.clientHeight / 2);
+  const g = canvas.getContext('2d'), R = rng(seed * 7919 + 1);
+  g.fillStyle = '#e5281b';
+  const strokes = seed === 7
+    ? [[-.05, .3, .45, -.05, 1.05, .2, 13], [-.05, 1.02, .55, .72, 1.05, 1.05, 10]]
+    : [[-.05, .2, .5, .02, 1.05, .1, 13], [.55, 1.05, .9, .55, 1.06, .42, 11], [-.05, .7, .15, .62, .3, .95, 8]];
+  for (const [x0, y0, cx, cy, x1, y1, w] of strokes) {
+    for (let i = 0; i <= 700; i++) {
+      const t = i / 700, u = 1 - t;
+      const x = (u * u * x0 + 2 * u * t * cx + t * t * x1) * W, y = (u * u * y0 + 2 * u * t * cy + t * t * y1) * H;
+      const rad = w * (.55 + .45 * Math.sin(t * Math.PI)) * (.85 + R() * .3);
+      for (let k = 0; k < 9; k++) {
+        const a = R() * 6.283, d = Math.sqrt(R()) * rad;
+        g.globalAlpha = .14 + R() * .32; g.fillRect(x + Math.cos(a) * d, y + Math.sin(a) * d, 1.3, 1.3);
+      }
+    }
+  }
+  g.globalAlpha = 1;
+}
+function shutter() {
+  const t = AC.currentTime;
+  noise(t, .03, 'highpass', 2500, .6); noise(t + .08, .05, 'highpass', 1800, .45);
+}
+function initDocs() {
+  $('#camBtn').addEventListener('click', () => {
+    const b = boardEls.docs;
+    b.classList.remove('flash', 'reveal'); void b.offsetWidth; b.classList.add('flash', 'reveal');
+    setTimeout(() => b.classList.remove('reveal'), 1600);
+    ensureAudio().then(shutter).catch(() => {});
+  });
+}
+
+/* little LED meter (art) / oscilloscope (tech) under the track title */
+/* ---------- Spotify (only when the page is the top window, i.e. the live site) ---------- */
+const OWN_SITE = (() => { try { return window.top === window.self; } catch (_) { return false; } })();
+let spotify = null, spotifyPlaying = false;
+function loadSpotify() {
+  if (!OWN_SITE || !MUSIC.spotifyId) return;
+  window.onSpotifyIframeApiReady = API => {
+    API.createController($('#spEmbed'), { uri: 'spotify:track:' + MUSIC.spotifyId, width: '100%', height: 80 }, c => {
+      spotify = c;
+      $('#npState').textContent = 'tap to play';
+      c.addListener('playback_update', e => {
+        spotifyPlaying = !e.data.isPaused;
+        const deck = $('#deck');
+        deck.classList.toggle('playing', spotifyPlaying || playing);
+        deck.setAttribute('aria-pressed', spotifyPlaying);
+        deck.setAttribute('aria-label', spotifyPlaying ? 'Pause ' + MUSIC.track : 'Play ' + MUSIC.track);
+        $('#npState').textContent = spotifyPlaying ? 'playing on Spotify' : 'paused';
+      });
+    });
+  };
+  const sc = document.createElement('script');
+  sc.src = 'https://open.spotify.com/embed/iframe-api/v1'; sc.async = true;
+  document.head.appendChild(sc);
+}
+
+function drawEq(t) {
+  const c = $('#eq'); if (!c) return;
+  const g = c.getContext('2d'), W = c.width, H = c.height;
+  g.clearRect(0, 0, W, H);
+  const live = playing && analyser;
+  if (live) { analyser.getByteFrequencyData(freqData); analyser.getByteTimeDomainData(timeData); }
+  if (spotifyPlaying && !live) { // no audio access to the embed: draw a soft, song-paced motion instead
+    if (xray) {
+      g.fillStyle = '#6cc8ec';
+      for (let x = 0; x < W; x++) g.fillRect(x, Math.round(H / 2 - Math.sin(x * .18 + t * 4) * Math.sin(x * .05 - t) * H * .38), 1, 1);
+      return;
+    }
+    const N = 20, bw = W / N;
+    for (let i = 0; i < N; i++) {
+      const v = .25 + .55 * Math.abs(Math.sin(t * 1.7 + i * .55) * Math.sin(t * .6 + i * .21));
+      const blocks = Math.round(v * (H / 2));
+      for (let b = 0; b < blocks; b++) { g.fillStyle = b === blocks - 1 ? PAL.accent : PAL.ink; g.fillRect(i * bw, H - (b + 1) * 2, bw - 1, 1); }
+    }
+    return;
+  }
+  if (xray) {
+    g.fillStyle = 'rgba(108,200,236,.25)'; for (let x = 0; x < W; x += 10) g.fillRect(x, 0, 1, H); g.fillRect(0, H >> 1, W, 1);
+    g.fillStyle = '#6cc8ec';
+    for (let x = 0; x < W; x++) {
+      const v = live ? (timeData[Math.floor(x / W * timeData.length)] - 128) / 128 : Math.sin(x * .3 + t * 3) * .06;
+      g.fillRect(x, Math.round(H / 2 - v * H * .9), 1, 1);
+    }
+    return;
+  }
+  const N = 20, bw = W / N;
+  for (let i = 0; i < N; i++) {
+    const bin = Math.floor(Math.pow(i / N, 1.5) * 70) + 1;
+    const v = live ? freqData[bin] / 255 : .12 + Math.sin(t * 2 + i * .7) * .06;
+    const blocks = Math.round(v * (H / 2));
+    for (let b = 0; b < blocks; b++) {
+      g.fillStyle = b === blocks - 1 && live ? PAL.accent : PAL.ink;
+      g.fillRect(i * bw, H - (b + 1) * 2, bw - 1, 1);
+    }
+  }
+}
+
+/* ---------- live dither background (the pfp's wavy texture) ---------- */
+const bg = $('#bg'), bgCtx = bg.getContext('2d');
+const CELL = 4; // screen pixels per dither pixel
+let bgImg, bgBuf, bgColors = [[18, 26, 16], [36, 54, 31]], bgDirty = true;
+const mouse = { x: -1e4, y: -1e4 };
+function sizeBg() {
+  bg.width = Math.ceil(innerWidth / CELL); bg.height = Math.ceil(innerHeight / CELL);
+  bgImg = bgCtx.createImageData(bg.width, bg.height); bgBuf = new Uint32Array(bgImg.data.buffer); bgDirty = true;
+}
+function renderBg(t) {
+  const W = bg.width, H = bg.height;
+  const c0 = bgColors[0], c1 = bgColors[1];
+  const u0 = (255 << 24) | (c0[2] << 16) | (c0[1] << 8) | c0[0];
+  const u1 = (255 << 24) | (c1[2] << 16) | (c1[1] << 8) | c1[0];
+  // parallax: texture drifts at a fraction of the camera
+  const ox = -cam.x * .25 / CELL, oy = -cam.y * .25 / CELL;
+  const mx = mouse.x / CELL, my = mouse.y / CELL, R2 = 900;
+  for (let y = 0; y < H; y++) {
+    const wy = (y + oy) * .03;
+    for (let x = 0; x < W; x++) {
+      const wx = (x + ox) * .03;
+      let v = Math.sin(wx * 1.3 + Math.sin(wy * .9 + t * .25) * 1.8 + t * .15)
+            + Math.sin(wy * 1.2 - t * .2 + Math.sin(wx * .7 - t * .1) * 1.5) * .8;
+      const dx = x - mx, dy = y - my, d2 = dx * dx + dy * dy;
+      if (d2 < R2 * 6) v += 1.4 * Math.exp(-d2 / R2) * Math.sin(Math.sqrt(d2) * .45 - t * 3);
+      let band = v * 2.4; band -= Math.floor(band);           // contour lines
+      const val = (.5 + .5 * Math.sin(v * 1.4)) * .62 + (band < .14 ? .38 : 0);
+      bgBuf[y * W + x] = val > BAYER[((y & 7) << 3) | (x & 7)] ? u1 : u0;
+    }
+  }
+  bgCtx.putImageData(bgImg, 0, 0);
+}
+let lastBg = 0;
+function loop(now) {
+  beat *= .86;
+  if (spotifyPlaying && !REDUCED) beat = Math.max(beat, .3 * (.5 + .5 * Math.sin(now / 1000 * 2.2))); // slow breathing
+  boardEls.cover.style.setProperty('--beat', beat.toFixed(3));
+  drawEq(now / 1000);
+  if (!document.hidden && (now - lastBg > 33) && (!REDUCED || bgDirty)) {
+    if (xray) renderGrid(REDUCED ? 0 : now / 1000); else renderBg(REDUCED ? 0 : now / 1000);
+    lastBg = now; bgDirty = false;
+  }
+  requestAnimationFrame(loop);
+}
+
+
+/* ---------- x-ray: retro perspective grid room ---------- */
+const xg = $('#xg'), xgCtx = xg.getContext('2d');
+const XCELL = 2; // drawn at half resolution, scaled up pixelated for chunky lines
+function sizeXg() { xg.width = Math.ceil(innerWidth / XCELL); xg.height = Math.ceil(innerHeight / XCELL); bgDirty = true; }
+function renderGrid(t) {
+  const W = xg.width, H = xg.height, g = xgCtx;
+  g.fillStyle = '#2d46d6'; g.fillRect(0, 0, W, H);
+  const vx = W / 2, vy = H / 2;                        // vanishing point
+  const band = H * .17;                                // empty middle strip, like a title zone
+  const sp = clamp(W / 9 * Math.sqrt(cam.z), W / 22, W / 3); // column spacing grows with zoom
+  const offX = ((cam.x / XCELL) % sp + sp) % sp;       // strafe with horizontal pan
+  const phase = (((-cam.y / XCELL) / 120 + t * .18) % 1 + 1) % 1; // fly forward with vertical pan + time
+  g.strokeStyle = '#6cc8ec'; g.lineWidth = 1.5; g.lineCap = 'square';
+  for (const dir of [1, -1]) {                         // 1 = floor, -1 = ceiling
+    const edge = dir > 0 ? H : 0, near = vy + dir * band;
+    g.save(); g.beginPath();
+    g.rect(0, Math.min(near, edge), W, Math.abs(edge - near)); g.clip();
+    for (let j = 0; j < 26; j++) {                     // depth rows: y = near + (edge - near) / z
+      const z = 1 + (j + 1 - phase) * .55;
+      const y = Math.round(near + (edge - near) / z);
+      g.globalAlpha = clamp(1.4 / z, .25, 1);
+      g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+    }
+    g.globalAlpha = 1;
+    const reach = (edge - vy) / (near - vy);           // columns radiate from the vanishing point
+    for (let i = -14; i <= 14; i++) {
+      const bx = vx + (i * sp + offX - sp / 2) * reach;
+      const nx = vx + (bx - vx) / reach;
+      g.beginPath(); g.moveTo(nx, near); g.lineTo(bx, edge); g.stroke();
+    }
+    g.restore();
+  }
+  for (const y of [vy - band, vy + band]) {            // soft glow along both horizons
+    const gr = g.createLinearGradient(0, y - 18, 0, y + 18);
+    gr.addColorStop(0, 'rgba(108,200,236,0)'); gr.addColorStop(.5, 'rgba(108,200,236,.35)'); gr.addColorStop(1, 'rgba(108,200,236,0)');
+    g.fillStyle = gr; g.fillRect(0, y - 18, W, 36);
+  }
+}
+function makeNoise() {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'), id = g.createImageData(128, 128), p = id.data;
+  for (let i = 0; i < p.length; i += 4) { const v = Math.random() * 255; p[i] = p[i + 1] = p[i + 2] = v; p[i + 3] = 90; }
+  g.putImageData(id, 0, 0);
+  document.documentElement.style.setProperty('--noise', `url(${c.toDataURL()})`);
+}
+
+/* ---------- mode switch with a dither dissolve ---------- */
+const fx = $('#fx'), fxCtx = fx.getContext('2d');
+function setMode(on, ox = innerWidth / 2, oy = innerHeight / 2) {
+  if (on === xray) return;
+  const swap = () => {
+    xray = on;
+    document.body.classList.toggle('xray', on);
+    $('#modeArt').setAttribute('aria-pressed', !on); $('#modeX').setAttribute('aria-pressed', on);
+    $('#smode').textContent = on ? 'Tech mode' : 'Art mode';
+    $('#sideTip').innerHTML = on ? 'Tech mode shows the build: grids, sizes, type specs and block diagrams. Press <b>T</b> to go back to art.'
+                                 : 'Click a layer to fly there. Press <b>T</b> for the tech side.';
+    redither(); applyCam(); renderInspector(); bgDirty = true;
+  };
+  if (REDUCED) { swap(); return; }
+  const C = 10, W = Math.ceil(innerWidth / C), H = Math.ceil(innerHeight / C);
+  fx.width = W; fx.height = H;
+  const img = fxCtx.createImageData(W, H), buf = new Uint32Array(img.data.buffer);
+  const col = hexToRgb(on ? '#2d46d6' : PAL.bg0), u = (255 << 24) | (col[2] << 16) | (col[1] << 8) | col[0];
+  const keys = new Float32Array(W * H), maxD = Math.hypot(Math.max(ox, innerWidth - ox), Math.max(oy, innerHeight - oy)) / C;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
+    keys[y * W + x] = Math.hypot(x - ox / C, y - oy / C) / maxD * .75 + BAYER[((y & 7) << 3) | (x & 7)] * .25;
+  const T = 300, t0 = performance.now(); let swapped = false;
+  const step = now => {
+    const k = (now - t0) / T;
+    if (k < 1) { for (let i = 0; i < buf.length; i++) buf[i] = keys[i] <= k ? u : 0; }
+    else {
+      if (!swapped) { swap(); swapped = true; }
+      const q = k - 1; for (let i = 0; i < buf.length; i++) buf[i] = keys[i] > q ? u : 0;
+    }
+    fxCtx.putImageData(img, 0, 0);
+    if (k < 2) requestAnimationFrame(step); else fxCtx.clearRect(0, 0, W, H);
+  };
+  requestAnimationFrame(step);
+}
+$('#modeArt').addEventListener('click', e => setMode(false, e.clientX, e.clientY));
+$('#modeX').addEventListener('click', e => setMode(true, e.clientX, e.clientY));
+
+/* ---------- quick view (plain, fast version for recruiters & clients) ---------- */
+function renderQV() {
+  $('#qvIn').innerHTML = `
+    <div class="qv-top"><span class="eyebrow">${esc(PROFILE.eyebrow)}</span><button class="btn" id="qvClose">Back to canvas</button></div>
+    <div><h1>${esc(PROFILE.short)}</h1><p style="font:500 22px/1.3 var(--f-display);margin-top:18px;max-width:30ch">“${esc(PROFILE.thesis)}”</p><p style="font:500 12px var(--f-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-top:8px">— ${esc(PROFILE.thesisBy)}</p></div>
+    <section><h2>About</h2><p>${esc(PROFILE.about)}</p><p style="margin-top:10px;color:var(--muted)">${esc(PROFILE.heading)}</p></section>
+    <section><h2>Skills</h2><div class="qv-list">
+      <div class="qv-item"><b>Design</b><small>${PROFILE.design.map(esc).join(' · ')}</small></div>
+      <div class="qv-item"><b>Tools</b><small>${PROFILE.tools.map(esc).join(' · ')} · ${esc(PROFILE.camera)}</small></div>
+      <div class="qv-item"><b>Tech</b><small>${PROFILE.tech.map(esc).join(' · ')}</small></div></div></section>
+    <section><h2>Tech projects</h2><div class="qv-list">${PROJECTS.filter(p => !p.ghost).map(p => `
+      <div class="qv-item"><b>${esc(p.title)}</b><span>${esc(p.blurb)}</span><small>${p.tags.map(esc).join(' · ')}</small></div>`).join('')}</div></section>
+    <section><h2>Designs</h2><div class="qv-list">${WORKS.map(w => `
+      <div class="qv-item"><b>${esc(w.title)}</b><small>${esc(w.type)}${w.year ? ' · ' + esc(w.year) : ''}</small></div>`).join('')}</div></section>
+    <section><h2>Documentation</h2><p>${PHOTOS.length} photos from events, sports and the street, shot on a ${esc(PROFILE.camera)}.</p></section>
+    <section><h2>${esc(MUSIC.label)}</h2><p><a href="${MUSIC.href}" target="_blank" rel="noopener" style="color:inherit">${esc(MUSIC.track)} · ${esc(MUSIC.artist)}</a></p></section>
+    <section><h2>Contact</h2><div class="qv-list">${CONTACT.map(c => `
+      <div class="qv-item"><small>${esc(c.k)}</small>${c.href ? `<a href="${c.href}" target="_blank" rel="noopener" style="color:inherit">${esc(c.v)}</a>` : `<code style="user-select:text">${esc(c.v)}</code>`}</div>`).join('')}</div></section>`;
+}
+function openQV(open) {
+  const q = $('#qv'); q.hidden = !open;
+  if (open) { renderQV(); $('#qvClose').focus(); } else $('#qvBtn').focus();
+}
+$('#qvBtn').addEventListener('click', () => openQV(true));
+$('#qv').addEventListener('click', e => { if (e.target.id === 'qvClose') openQV(false); });
+
+/* ---------- misc buttons ---------- */
+$('#zoomBtn').addEventListener('click', () => fitAll());
+$('#layersBtn').addEventListener('click', () => {
+  const s = $('#side'), o = !s.classList.contains('open'); s.classList.toggle('open', o);
+  $('#layersBtn').setAttribute('aria-expanded', o);
+});
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-copy]'); if (!b) return;
+  const v = b.dataset.copy;
+  const fallback = () => { const code = b.previousElementSibling; const r = document.createRange(); r.selectNodeContents(code); const s = getSelection(); s.removeAllRanges(); s.addRange(r); toast('Selected. Press Ctrl+C to copy.'); };
+  try { navigator.clipboard.writeText(v).then(() => toast('Copied ' + v), fallback); } catch (_) { fallback(); }
+});
+
+/* ---------- keyboard ---------- */
+addEventListener('keydown', e => {
+  if (e.target.closest('input, textarea')) return;
+  if (!$('#qv').hidden) { if (e.key === 'Escape') openQV(false); return; }
+  if (e.code === 'Space' && !e.repeat) { spaceHand = true; updateCursor(); e.preventDefault(); return; }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  const map = { v: 'move', h: 'hand', p: 'pen', i: 'drop', z: 'zoom' };
+  if (map[k]) setTool(map[k]);
+  else if (k === 'x' || k === 't') setMode(!xray, mouse.x > 0 ? mouse.x : undefined, mouse.y > 0 ? mouse.y : undefined);
+  else if (k === 'q') openQV(true);
+  else if (k === '0') fitAll();
+  else if (k >= '1' && k <= '6') goBoard(ORDER[+k - 1]);
+  else if (k === '+' || k === '=') zoomAt(innerWidth / 2, innerHeight / 2, 1.25);
+  else if (k === '-') zoomAt(innerWidth / 2, innerHeight / 2, .8);
+  else if (k === 'escape') { select(null); $('#loupe').style.display = 'none'; }
+});
+addEventListener('keyup', e => { if (e.code === 'Space') { spaceHand = false; updateCursor(); } });
+
+/* ---------- intro: the page develops out of a dither, from the center ---------- */
+function introReveal() {
+  if (REDUCED) return;
+  const C = 10, W = Math.ceil(innerWidth / C), H = Math.ceil(innerHeight / C);
+  fx.width = W; fx.height = H;
+  const img = fxCtx.createImageData(W, H), buf = new Uint32Array(img.data.buffer);
+  const col = hexToRgb(PAL.ink), u = (255 << 24) | (col[2] << 16) | (col[1] << 8) | col[0];
+  const keys = new Float32Array(W * H), cx = W / 2, cy = H / 2, maxD = Math.hypot(cx, cy);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
+    keys[y * W + x] = Math.hypot(x - cx, y - cy) / maxD * .7 + BAYER[((y & 7) << 3) | (x & 7)] * .3;
+  const t0 = performance.now(), T = 900;
+  const step = now => {
+    const q = (now - t0) / T;
+    for (let i = 0; i < buf.length; i++) buf[i] = keys[i] > q ? u : 0;
+    fxCtx.putImageData(img, 0, 0);
+    if (q < 1) requestAnimationFrame(step); else fxCtx.clearRect(0, 0, W, H);
+  };
+  requestAnimationFrame(step);
+}
+
+/* ---------- boot ---------- */
+let userMoved = false;
+addEventListener('resize', () => { sizeBg(); sizeXg(); applyCam(); });
+setAccent(DEFAULT_ACCENT, true);
+sizeBg();
+sizeXg();
+makeNoise();
+fitAll(true);
+introReveal();
+select(null);
+setTool('move', true);
+requestAnimationFrame(loop);
+(document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+  registerDithers();
+  initCover();
+  initDocs();
+  setTimeout(() => {
+    if (!userMoved) { goBoard('cover'); }
+    toast('Pick a tool on the left. Press T for the tech side.');
+  }, 900);
+});
+</script>
