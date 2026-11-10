@@ -1,17 +1,18 @@
 # farras · portfolio
 
-Half designer, half engineer. An interactive portfolio built like a design app:
-infinite canvas, working tools (pen, eyedropper, zoom), live dither textures,
-and a TECH mode that shows how everything is built.
+Graphic designer and Computer Engineering student. A blue-and-white halftone
+portfolio: posters, documentation, embedded systems and software.
 
-Live: https://slickboiras.github.io
+Live: https://slickboiras.github.io (previous canvas version: /v1/)
 
 ## Edit
-1. Change content in `src/template.html` (the `CONTENT` block at the top of the script:
-   profile, designs, photos, projects, music, contact).
-2. Put new images in `src/img/` and reference them as `'__IMG:name__'` with `ratio: __R:name__`.
-3. Rebuild: `python3 src/build.py` (needs Pillow) → writes `index.html`.
+1. Change content in `src/page.html`, in the `CONTENT` block at the top of the script
+   (projects, skills, persona texts). Section text (About, Path, Contact) is plain HTML above it.
+2. Put new images in `src/img/` as `.jpg` and reference them as `__IMG:filename__`.
+3. Rebuild: `python3 src/build.py` writes `index.html` with the images inlined.
 4. Commit and push. GitHub Pages updates in a minute or two.
 
-## Shortcuts
-`V` move · `H` hand · `P` pen · `I` eyedropper · `Z` zoom · `T` art/tech · `1–6` boards · `0` fit all · `Q` quick view
+## Interactions
+Halftone name reacts to the cursor (click for a ripple) · headline letters widen under the cursor ·
+skills columns open like an accordion · project cards open a detail view (←/→ to step, Esc to close) ·
+`Invert` swaps to white-on-blue.
